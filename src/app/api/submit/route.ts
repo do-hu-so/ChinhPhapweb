@@ -25,18 +25,16 @@ export async function POST(req: Request) {
         console.log('Received submission for:', data.huongLinh);
 
         // 1. Image Compositing with Sharp and Canvas
-        // - Resize to fit within 20x30 proportion frame
-        // - Add a name plate at the bottom with the Huong Linh information
         const imageBuffer = Buffer.from(await imageFile.arrayBuffer());
 
-        // Process user image: resize so it perfectly fits inside the inner frame
-        const portraitWidth = 1600;
-        const portraitHeight = 2100;
-        const processedPortrait = await sharp(imageBuffer)
-            .resize(portraitWidth, portraitHeight, { fit: 'cover', position: 'center' })
-            .toBuffer();
+        // Load the template frame from public/khung.jpg
+        const framePath = path.join(process.cwd(), 'public', 'khung.jpg');
+        const frameImg = await loadImage(framePath);
 
-        // Canvas Setup (2000x3000)
+        // Calculate proportions (Scale 2x for high quality output)
+        const canvasW = frameImg.width * 2; // e.g. 840 * 2 = 1680
+        const canvasH = frameImg.height * 2; // e.g. 1248 * 2 = 2496
+
         // Ensure fonts are registered before creating canvas
         try {
             const boldFontPath = path.join(process.cwd(), 'public', 'fonts', 'Roboto-Bold.ttf');
@@ -47,52 +45,51 @@ export async function POST(req: Request) {
             console.error('Warning: Could not register fonts. Falling back to default.', fontErr);
         }
 
-        const canvasW = 2000;
-        const canvasH = 3000;
         const canvas = createCanvas(canvasW, canvasH);
         const ctx = canvas.getContext('2d');
 
-        // Draw Background (White/Cream)
-        ctx.fillStyle = '#FFFDF5';
+        // Draw Background (White to avoid transparency issues in JPG)
+        ctx.fillStyle = '#FFFFFF';
         ctx.fillRect(0, 0, canvasW, canvasH);
 
-        // Draw Buddhist Frame (Simple elegant borders)
-        ctx.lineWidth = 40;
-        ctx.strokeStyle = '#8D6E63'; // Brown border
-        ctx.strokeRect(60, 60, canvasW - 120, canvasH - 120);
+        // Determine safe inner area for the portrait (~11% bounds based on template analysis)
+        const safeX = canvasW * 0.11;
+        const safeY = canvasH * 0.11;
+        const safeW = canvasW * 0.78;
+        const safeH = canvasH * 0.78;
 
-        ctx.lineWidth = 15;
-        ctx.strokeStyle = '#FFC837'; // Gold inner border
-        ctx.strokeRect(120, 120, canvasW - 240, canvasH - 240);
+        // Process user image to fit safe area exactly
+        const processedPortrait = await sharp(imageBuffer)
+            .resize(Math.floor(safeW), Math.floor(safeH), { fit: 'cover', position: 'center' })
+            .toBuffer();
 
-        // Draw uploaded portrait
         const portraitImg = await loadImage(processedPortrait);
-        // Center the portrait horizontally, shift up slightly to leave room for the nameplate
-        const portraitX = (canvasW - portraitWidth) / 2;
-        const portraitY = 200;
-        ctx.drawImage(portraitImg, portraitX, portraitY, portraitWidth, portraitHeight);
 
-        // Add a gradient or solid blue nameplate at the bottom
-        ctx.fillStyle = '#0F3057'; // Deep solemn blue
-        const plateHeight = 450;
-        const plateY = canvasH - 120 - plateHeight - 50;
-        const plateX = 200;
-        const plateW = canvasW - 400;
-        ctx.fillRect(plateX, plateY, plateW, plateHeight);
+        // Draw the user portrait first
+        ctx.drawImage(portraitImg, safeX, safeY, safeW, safeH);
 
-        // Inner gold border for the plate
-        ctx.lineWidth = 5;
-        ctx.strokeStyle = '#FFC837';
-        ctx.strokeRect(plateX + 10, plateY + 10, plateW - 20, plateHeight - 20);
+        // Draw the frame OVER the portrait using multiply blend mode!
+        // This makes white areas of the frame transparent, leaving black borders visible on top of the portrait.
+        ctx.globalCompositeOperation = 'multiply';
+        ctx.drawImage(frameImg, 0, 0, canvasW, canvasH);
+        ctx.globalCompositeOperation = 'source-over'; // reset
+
+        // Draw Text Background (Nameplate at the bottom of portrait)
+        const plateHeight = 350;
+        const plateY = safeY + safeH - plateHeight;
+
+        // Semi-transparent dark background for readability
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
+        ctx.fillRect(safeX, plateY, safeW, plateHeight);
 
         // Add Text to Nameplate
         ctx.textAlign = 'center';
-        ctx.fillStyle = '#FFC837'; // Gold text
+        ctx.fillStyle = '#FFD700'; // Gold text
 
-        ctx.font = 'bold 90px "Roboto", sans-serif';
-        ctx.fillText(data.huongLinh?.toUpperCase() || 'HƯƠNG LINH', canvasW / 2, plateY + 130);
+        ctx.font = 'bold 70px "Roboto", sans-serif';
+        ctx.fillText(data.huongLinh?.toUpperCase() || 'HƯƠNG LINH', canvasW / 2, plateY + 110);
 
-        ctx.font = 'normal 60px "Roboto", sans-serif';
+        ctx.font = 'normal 45px "Roboto", sans-serif';
         ctx.fillStyle = '#FFFFFF';
 
         const birthYear = data.namSinh ? `Sinh năm: ${data.namSinh}` : '';
@@ -100,13 +97,13 @@ export async function POST(req: Request) {
         const yearsInfo = [birthYear, deathYear].filter(Boolean).join(' - ');
 
         if (yearsInfo) {
-            ctx.fillText(yearsInfo, canvasW / 2, plateY + 250);
+            ctx.fillText(yearsInfo, canvasW / 2, plateY + 210);
         }
 
         if (data.huongTho) {
-            ctx.fillStyle = '#FFC837';
+            ctx.fillStyle = '#FFD700';
             ctx.font = 'normal 50px "Roboto", sans-serif';
-            ctx.fillText(data.huongTho, canvasW / 2, plateY + 360);
+            ctx.fillText(data.huongTho, canvasW / 2, plateY + 300);
         }
 
         // Final Composite Image Buffer
