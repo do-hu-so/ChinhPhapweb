@@ -118,7 +118,7 @@ export async function POST(req: Request) {
 
         // Cấu trúc dữ liệu theo form được yêu cầu
         const payload = {
-            baseFileName: data.huongLinh || `HuongLinh_${Date.now()}`,
+            baseFileName: data.huongLinh ? `${data.huongLinh}_${Date.now()}` : `HuongLinh_${Date.now()}`,
             originalImageBase64: imageBuffer.toString('base64'),
             framedImageBase64: finalImageBuffer.toString('base64'),
 
