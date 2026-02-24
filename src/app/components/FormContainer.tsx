@@ -16,7 +16,12 @@ const schema = yup.object().shape({
     phapDanhHuongLinh: yup.string(),
     namSinh: yup.string(),
     namMatDuongLich: yup.string(),
-    namMatAmLich: yup.string(),
+    namMatAmLich: yup.string()
+        .test(
+            'no-numbers',
+            'Vui lòng chỉ nhập chữ, không nhập số (VD: Ất Tỵ)',
+            value => !value || !/\d/.test(value)
+        ),
     gioMat: yup.string(),
     huongTho: yup.string().required('Hưởng thọ/Hưởng dương là bắt buộc'),
     noiAnTang: yup.string(),
@@ -183,6 +188,7 @@ export default function FormContainer() {
                     <div>
                         <label className={labelClass}>Năm Mất Âm Lịch</label>
                         <input {...register("namMatAmLich")} className={inputClass} placeholder="Viết chữ, ví dụ: Ất Tỵ" />
+                        {errors.namMatAmLich && <p className="text-red-500 text-xs mt-1">{errors.namMatAmLich.message}</p>}
                     </div>
 
                     <div className="md:col-span-2">
