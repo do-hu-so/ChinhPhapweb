@@ -37,6 +37,16 @@ export async function POST(req: Request) {
             .toBuffer();
 
         // Canvas Setup (2000x3000)
+        // Ensure fonts are registered before creating canvas
+        try {
+            const boldFontPath = path.join(process.cwd(), 'public', 'fonts', 'Roboto-Bold.ttf');
+            const regularFontPath = path.join(process.cwd(), 'public', 'fonts', 'Roboto-Regular.ttf');
+            registerFont(boldFontPath, { family: 'Roboto', weight: 'bold' });
+            registerFont(regularFontPath, { family: 'Roboto', weight: 'normal' });
+        } catch (fontErr) {
+            console.error('Warning: Could not register fonts. Falling back to default.', fontErr);
+        }
+
         const canvasW = 2000;
         const canvasH = 3000;
         const canvas = createCanvas(canvasW, canvasH);
@@ -79,10 +89,10 @@ export async function POST(req: Request) {
         ctx.textAlign = 'center';
         ctx.fillStyle = '#FFC837'; // Gold text
 
-        ctx.font = 'bold 90px sans-serif';
+        ctx.font = 'bold 90px "Roboto", sans-serif';
         ctx.fillText(data.huongLinh?.toUpperCase() || 'HƯƠNG LINH', canvasW / 2, plateY + 130);
 
-        ctx.font = '60px sans-serif';
+        ctx.font = 'normal 60px "Roboto", sans-serif';
         ctx.fillStyle = '#FFFFFF';
 
         const birthYear = data.namSinh ? `Sinh năm: ${data.namSinh}` : '';
@@ -95,6 +105,7 @@ export async function POST(req: Request) {
 
         if (data.huongTho) {
             ctx.fillStyle = '#FFC837';
+            ctx.font = 'normal 50px "Roboto", sans-serif';
             ctx.fillText(data.huongTho, canvasW / 2, plateY + 360);
         }
 
