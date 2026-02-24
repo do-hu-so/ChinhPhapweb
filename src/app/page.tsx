@@ -1,4 +1,5 @@
 import { Metadata } from 'next';
+import Image from 'next/image';
 import FormContainer from './components/FormContainer';
 
 export const metadata: Metadata = {
@@ -12,14 +13,15 @@ export default function Home() {
       <div className="max-w-3xl w-full">
         {/* Header Section */}
         <div className="text-center mb-10">
-          <div className="inline-block p-4 rounded-full bg-orange-100 mb-4 shadow-sm border border-orange-200">
-            {/* Minimalist Lotus SVG for decoration */}
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M12 22C12 22 17 18 19 13C20.6667 8.83333 19 5 19 5C19 5 15.5 5 12 11C8.5 5 5 5 5 5C5 5 3.33333 8.83333 5 13C7 18 12 22 12 22Z" fill="#FF9A00" fillOpacity="0.8" />
-              <path d="M12 22C12 22 14 17 14 12C14 7 12 3 12 3C12 3 10 7 10 12C10 17 12 22 12 22Z" fill="#FFC837" fillOpacity="0.9" />
-              <path d="M12 22C12 22 7.5 19.5 5.5 15.5C3.5 11.5 3 7 3 7C3 7 7 8 9.5 13C11 16 12 22 12 22Z" fill="#FF9A00" fillOpacity="0.6" />
-              <path d="M12 22C12 22 16.5 19.5 18.5 15.5C20.5 11.5 21 7 21 7C21 7 17 8 14.5 13C13 16 12 22 12 22Z" fill="#FF9A00" fillOpacity="0.6" />
-            </svg>
+          <div className="inline-block p-2 rounded-full bg-white mb-4 shadow-sm border border-orange-200 overflow-hidden">
+            {/* Using the avata.jpg image as requested */}
+            <Image
+              src="/avata.jpg"
+              alt="Logo"
+              width={64}
+              height={64}
+              className="rounded-full object-cover w-16 h-16"
+            />
           </div>
 
           <h1 className="text-3xl sm:text-4xl md:text-5xl font-serif text-buddhist-dark md:leading-tight mb-3">
@@ -43,7 +45,7 @@ export default function Home() {
 
         {/* Footer */}
         <div className="text-center mt-8 text-buddhist-frame/70 text-sm">
-          <p>Trang web phục vụ đăng ký tự động và xử lý tạo ảnh Di Ảnh chuẩn.</p>
+          <p>Trang web phục vụ đăng ký tự động của Thiền Viện Trúc Lâm Chính Pháp - Tuyên Quang.</p>
         </div>
       </div>
     </main>
