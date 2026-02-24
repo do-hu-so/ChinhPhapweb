@@ -1,0 +1,32 @@
+@import "tailwindcss";
+
+@theme {
+  --color-buddhist-orange: #FF9A00;
+  --color-buddhist-yellow: #FFC837;
+  --color-buddhist-red: #D32F2F;
+  --color-buddhist-bg: #FFFDF5;
+  --color-buddhist-dark: #3E2723;
+  --color-buddhist-frame: #8D6E63;
+}
+
+body {
+  @apply text-buddhist-dark bg-buddhist-bg min-h-screen font-sans antialiased;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #FFC837;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #FF9A00;
+}
