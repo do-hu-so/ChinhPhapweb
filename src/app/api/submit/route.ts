@@ -87,7 +87,16 @@ export async function POST(req: Request) {
         ctx.fillStyle = '#FFD700'; // Gold text
 
         ctx.font = 'bold 70px "Roboto", sans-serif';
-        ctx.fillText(data.huongLinh?.toUpperCase() || 'HƯƠNG LINH', canvasW / 2, plateY + 110);
+
+        // Auto-prepend "HƯƠNG LINH " if it doesn't exist
+        let huongLinhName = (data.huongLinh || '').trim().toUpperCase();
+        if (huongLinhName && !huongLinhName.includes('HƯƠNG LINH')) {
+            huongLinhName = `HƯƠNG LINH ${huongLinhName}`;
+        } else if (!huongLinhName) {
+            huongLinhName = 'HƯƠNG LINH';
+        }
+
+        ctx.fillText(huongLinhName, canvasW / 2, plateY + 110);
 
         ctx.font = 'normal 45px "Roboto", sans-serif';
         ctx.fillStyle = '#FFFFFF';
@@ -103,7 +112,19 @@ export async function POST(req: Request) {
         if (data.huongTho) {
             ctx.fillStyle = '#FFD700';
             ctx.font = 'normal 50px "Roboto", sans-serif';
-            ctx.fillText(data.huongTho, canvasW / 2, plateY + 300);
+
+            let huongThoText = data.huongTho.trim();
+            // Nếu người dùng không nhập chữ "hưởng" (chỉ nhập số "34" hoặc "34 tuổi")
+            if (!huongThoText.toLowerCase().includes('hưởng')) {
+                const ageMatch = huongThoText.match(/\d+/);
+                const age = ageMatch ? parseInt(ageMatch[0]) : 0;
+                // Nhỏ hơn bằng 60 thường dùng Hưởng dương, ngược lại là Hưởng thọ
+                const prefix = (age > 0 && age <= 60) ? 'Hưởng dương' : 'Hưởng thọ';
+                const suffix = !huongThoText.toLowerCase().includes('tuổi') ? ' tuổi' : '';
+                huongThoText = `${prefix}: ${huongThoText}${suffix}`;
+            }
+
+            ctx.fillText(huongThoText, canvasW / 2, plateY + 300);
         }
 
         // Final Composite Image Buffer
