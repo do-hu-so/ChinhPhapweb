@@ -102,7 +102,17 @@ export async function POST(req: Request) {
         ctx.fillStyle = '#FFFFFF';
 
         const birthYear = data.namSinh ? `Sinh năm: ${data.namSinh}` : '';
-        const deathYear = data.namMatDuongLich ? `Mất năm: ${data.namMatDuongLich}` : '';
+
+        let deathYear = '';
+        if (data.namMatDuongLich && data.namMatAmLich) {
+            deathYear = `Mất năm: ${data.namMatDuongLich} (${data.namMatAmLich})`;
+        } else if (data.namMatDuongLich) {
+            deathYear = `Mất năm: ${data.namMatDuongLich}`;
+        } else if (data.namMatAmLich) {
+            // Just in case they only provide lunar year
+            deathYear = `Mất năm: ${data.namMatAmLich}`;
+        }
+
         const yearsInfo = [birthYear, deathYear].filter(Boolean).join(' - ');
 
         if (yearsInfo) {

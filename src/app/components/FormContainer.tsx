@@ -182,7 +182,7 @@ export default function FormContainer() {
                     </div>
                     <div>
                         <label className={labelClass}>Năm Mất Âm Lịch</label>
-                        <input {...register("namMatAmLich")} className={inputClass} placeholder="e.g. Ất Tỵ" />
+                        <input {...register("namMatAmLich")} className={inputClass} placeholder="Viết chữ, ví dụ: Ất Tỵ" />
                     </div>
 
                     <div className="md:col-span-2">
