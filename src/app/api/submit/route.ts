@@ -78,8 +78,8 @@ export async function POST(req: Request) {
         const plateHeight = 350;
         const plateY = safeY + safeH - plateHeight;
 
-        // Semi-transparent dark background for readability
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
+        // Solid light green background for readability
+        ctx.fillStyle = '#4B8540';
         ctx.fillRect(safeX, plateY, safeW, plateHeight);
 
         // Add Text to Nameplate
@@ -114,8 +114,9 @@ export async function POST(req: Request) {
         console.log('Sending data to Google Apps Script...');
 
         // Cấu trúc dữ liệu theo form được yêu cầu
+        const randomId = Math.floor(Math.random() * 900) + 100; // 3-digit random number
         const payload = {
-            baseFileName: data.huongLinh ? `${data.huongLinh}_${Date.now()}` : `HuongLinh_${Date.now()}`,
+            baseFileName: data.huongLinh ? `${data.huongLinh}_${randomId}` : `HuongLinh_${randomId}`,
             originalImageBase64: imageBuffer.toString('base64'),
             framedImageBase64: finalImageBuffer.toString('base64'),
 
