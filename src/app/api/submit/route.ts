@@ -27,8 +27,8 @@ export async function POST(req: Request) {
         // 1. Image Compositing with Sharp and Canvas
         const imageBuffer = Buffer.from(await imageFile.arrayBuffer());
 
-        // Load the template frame from public/khung.jpg
-        const framePath = path.join(process.cwd(), 'public', 'khung.jpg');
+        // Load the template frame
+        const framePath = path.join(process.cwd(), 'image', 'khung_tho_2.png');
         const frameImg = await loadImage(framePath);
 
         // Calculate proportions (Scale 2x for high quality output)
@@ -52,11 +52,11 @@ export async function POST(req: Request) {
         ctx.fillStyle = '#FFFFFF';
         ctx.fillRect(0, 0, canvasW, canvasH);
 
-        // Determine safe inner area for the portrait (~11% bounds based on template analysis)
-        const safeX = canvasW * 0.11;
-        const safeY = canvasH * 0.11;
-        const safeW = canvasW * 0.78;
-        const safeH = canvasH * 0.78;
+        // Determine safe inner area for the portrait (~21% X, 14% Y from analysis)
+        const safeX = canvasW * 0.2116;
+        const safeY = canvasH * 0.1392;
+        const safeW = canvasW * 0.5865;
+        const safeH = canvasH * 0.6745;
 
         // Process user image to fit safe area exactly
         const processedPortrait = await sharp(imageBuffer)
@@ -74,8 +74,35 @@ export async function POST(req: Request) {
         ctx.drawImage(frameImg, 0, 0, canvasW, canvasH);
         ctx.globalCompositeOperation = 'source-over'; // reset
 
-        // Draw Text Background (Nameplate at the bottom of portrait)
-        const plateHeight = 350;
+        // Calculate dynamic plate height if there is tieuSu
+        let textLines: string[] = [];
+        if (data.tomTatTieuSu) {
+            ctx.font = 'normal 40px "Roboto", sans-serif';
+            const paragraphs = data.tomTatTieuSu.split('\n');
+            const maxWidth = safeW - 80;
+            paragraphs.forEach(paragraph => {
+                const words = paragraph.split(' ');
+                let line = '';
+                for (let n = 0; n < words.length; n++) {
+                    const testLine = line + words[n] + ' ';
+                    const metrics = ctx.measureText(testLine);
+                    if (metrics.width > maxWidth && n > 0) {
+                        textLines.push(line.trim());
+                        line = words[n] + ' ';
+                    } else {
+                        line = testLine;
+                    }
+                }
+                if (line) textLines.push(line.trim());
+            });
+        }
+
+        const tieuSuHeight = textLines.length > 0 ? textLines.length * 60 : 0;
+        let plateHeight = 350 + tieuSuHeight;
+        // Keep some bottom padding
+        if (textLines.length > 0) {
+            plateHeight += 30; // Extra padding at the bottom
+        }
         const plateY = safeY + safeH - plateHeight;
 
         // Solid light green background for readability
@@ -137,6 +164,18 @@ export async function POST(req: Request) {
             ctx.fillText(huongThoText, canvasW / 2, plateY + 300);
         }
 
+        // Draw tomTatTieuSu lines
+        if (textLines.length > 0) {
+            ctx.fillStyle = '#FFFFFF';
+            // Use lighter and smaller font for the summary
+            ctx.font = 'normal 40px "Roboto", sans-serif';
+            let currentY = plateY + 380; // Starting Y below huongTho
+            textLines.forEach(line => {
+                ctx.fillText(line, canvasW / 2, currentY);
+                currentY += 60; // Line height
+            });
+        }
+
         // Final Composite Image Buffer
         const finalImageBuffer = canvas.toBuffer('image/jpeg', { quality: 0.95 });
         // (In a real app, this finalImageBuffer gets uploaded to Drive)
@@ -163,6 +202,7 @@ export async function POST(req: Request) {
             gioMat: data.gioMat || '',
             huongTho: data.huongTho || '',
             noiAnTang: data.noiAnTang || '',
+            tomTatTieuSu: data.tomTatTieuSu || '',
             thoiGianKyGui: data.thoiGianKyGui === 'khongThoiHan' ? 'Không thời hạn' : 'Có thời hạn',
             ngayDangKy: data.ngayDangKy || new Date().toLocaleString('vi-VN')
         };

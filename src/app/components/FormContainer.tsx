@@ -25,6 +25,7 @@ const schema = yup.object().shape({
     gioMat: yup.string(),
     huongTho: yup.string().required('Hưởng thọ/Hưởng dương là bắt buộc'),
     noiAnTang: yup.string(),
+    tomTatTieuSu: yup.string(),
 
     thoiGianKyGui: yup.string().oneOf(['coThoiHan', 'khongThoiHan']).required('Vui lòng chọn thời gian ký gửi'),
 });
@@ -194,6 +195,11 @@ export default function FormContainer() {
                     <div className="md:col-span-2">
                         <label className={labelClass}>Nơi An Táng</label>
                         <input {...register("noiAnTang")} className={inputClass} placeholder="Nghĩa trang..." />
+                    </div>
+
+                    <div className="md:col-span-2">
+                        <label className={labelClass}>Tóm tắt tiểu sử hương linh</label>
+                        <textarea {...register("tomTatTieuSu")} className={`${inputClass} min-h-[100px] resize-y`} placeholder="nhập thông tin tiểu sử của hương linh (như điếu văn)" />
                     </div>
                 </div>
 
