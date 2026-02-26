@@ -75,35 +75,8 @@ export async function POST(req: Request) {
         ctx.drawImage(frameImg, 0, 0, canvasW, canvasH);
         ctx.globalCompositeOperation = 'source-over'; // reset
 
-        // Calculate dynamic plate height if there is tieuSu
-        let textLines: string[] = [];
-        if (data.tomTatTieuSu) {
-            ctx.font = 'normal 40px "Roboto", sans-serif';
-            const paragraphs = data.tomTatTieuSu.split('\n');
-            const maxWidth = safeW - 80;
-            paragraphs.forEach(paragraph => {
-                const words = paragraph.split(' ');
-                let line = '';
-                for (let n = 0; n < words.length; n++) {
-                    const testLine = line + words[n] + ' ';
-                    const metrics = ctx.measureText(testLine);
-                    if (metrics.width > maxWidth && n > 0) {
-                        textLines.push(line.trim());
-                        line = words[n] + ' ';
-                    } else {
-                        line = testLine;
-                    }
-                }
-                if (line) textLines.push(line.trim());
-            });
-        }
-
-        const tieuSuHeight = textLines.length > 0 ? textLines.length * 35 : 0;
-        let plateHeight = 175 + tieuSuHeight;
-        // Keep some bottom padding
-        if (textLines.length > 0) {
-            plateHeight += 20; // Extra padding at the bottom
-        }
+        // Nameplate always has a fixed height
+        let plateHeight = 220;
         const plateY = safeY + safeH - plateHeight;
 
         // Solid light green background for readability
@@ -163,18 +136,6 @@ export async function POST(req: Request) {
             }
 
             ctx.fillText(huongThoText, canvasW / 2, plateY + 160);
-        }
-
-        // Draw tomTatTieuSu lines
-        if (textLines.length > 0) {
-            ctx.fillStyle = '#FFFFFF';
-            // Use lighter and smaller font for the summary
-            ctx.font = 'normal 30px "Roboto", sans-serif';
-            let currentY = plateY + 205; // Starting Y below huongTho
-            textLines.forEach(line => {
-                ctx.fillText(line, canvasW / 2, currentY);
-                currentY += 35; // Line height
-            });
         }
 
         // Final Composite Image Buffer
