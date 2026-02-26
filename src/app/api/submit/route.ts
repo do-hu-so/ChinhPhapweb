@@ -53,9 +53,10 @@ export async function POST(req: Request) {
         ctx.fillRect(0, 0, canvasW, canvasH);
 
         // Determine safe inner area for the portrait (~21% X, 14% Y from analysis)
-        const safeX = canvasW * 0.2116;
+        // Adjusting slightly to cover the left white border based on user feedback
+        const safeX = canvasW * 0.208; // slightly less than 0.2116 to move left
         const safeY = canvasH * 0.1392;
-        const safeW = canvasW * 0.5865;
+        const safeW = canvasW * 0.59; // slightly more than 0.5865 to be wider
         const safeH = canvasH * 0.6745;
 
         // Process user image to fit safe area exactly
@@ -97,11 +98,11 @@ export async function POST(req: Request) {
             });
         }
 
-        const tieuSuHeight = textLines.length > 0 ? textLines.length * 60 : 0;
-        let plateHeight = 350 + tieuSuHeight;
+        const tieuSuHeight = textLines.length > 0 ? textLines.length * 35 : 0;
+        let plateHeight = 175 + tieuSuHeight;
         // Keep some bottom padding
         if (textLines.length > 0) {
-            plateHeight += 30; // Extra padding at the bottom
+            plateHeight += 20; // Extra padding at the bottom
         }
         const plateY = safeY + safeH - plateHeight;
 
@@ -113,7 +114,7 @@ export async function POST(req: Request) {
         ctx.textAlign = 'center';
         ctx.fillStyle = '#FFD700'; // Gold text
 
-        ctx.font = 'bold 70px "Roboto", sans-serif';
+        ctx.font = 'bold 55px "Roboto", sans-serif';
 
         // Auto-prepend "HƯƠNG LINH " if it doesn't exist
         let huongLinhName = (data.huongLinh || '').trim().toUpperCase();
@@ -123,9 +124,9 @@ export async function POST(req: Request) {
             huongLinhName = 'HƯƠNG LINH';
         }
 
-        ctx.fillText(huongLinhName, canvasW / 2, plateY + 110);
+        ctx.fillText(huongLinhName, canvasW / 2, plateY + 60);
 
-        ctx.font = 'normal 45px "Roboto", sans-serif';
+        ctx.font = 'normal 35px "Roboto", sans-serif';
         ctx.fillStyle = '#FFFFFF';
 
         const birthYear = data.namSinh ? `Sinh năm: ${data.namSinh}` : '';
@@ -143,12 +144,12 @@ export async function POST(req: Request) {
         const yearsInfo = [birthYear, deathYear].filter(Boolean).join(' - ');
 
         if (yearsInfo) {
-            ctx.fillText(yearsInfo, canvasW / 2, plateY + 210);
+            ctx.fillText(yearsInfo, canvasW / 2, plateY + 110);
         }
 
         if (data.huongTho) {
             ctx.fillStyle = '#FFD700';
-            ctx.font = 'normal 50px "Roboto", sans-serif';
+            ctx.font = 'normal 40px "Roboto", sans-serif';
 
             let huongThoText = data.huongTho.trim();
             // Nếu người dùng không nhập chữ "hưởng" (chỉ nhập số "34" hoặc "34 tuổi")
@@ -161,18 +162,18 @@ export async function POST(req: Request) {
                 huongThoText = `${prefix}: ${huongThoText}${suffix}`;
             }
 
-            ctx.fillText(huongThoText, canvasW / 2, plateY + 300);
+            ctx.fillText(huongThoText, canvasW / 2, plateY + 160);
         }
 
         // Draw tomTatTieuSu lines
         if (textLines.length > 0) {
             ctx.fillStyle = '#FFFFFF';
             // Use lighter and smaller font for the summary
-            ctx.font = 'normal 40px "Roboto", sans-serif';
-            let currentY = plateY + 380; // Starting Y below huongTho
+            ctx.font = 'normal 30px "Roboto", sans-serif';
+            let currentY = plateY + 205; // Starting Y below huongTho
             textLines.forEach(line => {
                 ctx.fillText(line, canvasW / 2, currentY);
-                currentY += 60; // Line height
+                currentY += 35; // Line height
             });
         }
 
