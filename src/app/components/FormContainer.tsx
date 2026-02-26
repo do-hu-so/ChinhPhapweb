@@ -107,7 +107,7 @@ export default function FormContainer() {
                 </div>
                 <h2 className="text-2xl font-bold text-gray-800 mb-2">Đăng Ký Thành Công!</h2>
                 <p className="text-gray-600 mb-8">
-                    Thông tin Hương Linh đã được tiếp nhận. Đang xử lý Di Ảnh và chuyển đến Chùa chuẩn bị Lễ Cúng.
+                    Thông tin Hương Linh đã được tiếp nhận và chuyển đến Thiền Viện Trúc Lâm Chính Pháp.
                 </p>
                 <button
                     onClick={() => window.location.reload()}
