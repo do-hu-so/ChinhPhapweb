@@ -62,11 +62,20 @@ function loadImage(blob: Blob): Promise<HTMLImageElement> {
     });
 }
 
+// Nhiều hương linh có thể cùng tách nền một lúc: xếp hàng để mô hình chạy lần lượt từng ảnh.
+let queue: Promise<unknown> = Promise.resolve();
+
 /**
  * Trả về ảnh JPEG đã xoá nền và thay phông xanh.
  * Ném lỗi nếu không tìm thấy người trong ảnh hoặc không chạy được mô hình.
  */
-export async function replaceBackgroundWithBlue(photo: File, onProgress?: (p: BgProgress) => void): Promise<File> {
+export function replaceBackgroundWithBlue(photo: File, onProgress?: (p: BgProgress) => void): Promise<File> {
+    const run = queue.then(() => replaceNow(photo, onProgress));
+    queue = run.catch(() => undefined);
+    return run;
+}
+
+async function replaceNow(photo: File, onProgress?: (p: BgProgress) => void): Promise<File> {
     const { tf, model, processor } = await loadModel(onProgress);
     onProgress?.({ stage: 'processing' });
 

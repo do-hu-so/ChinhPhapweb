@@ -1,19 +1,15 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { useForm } from 'react-hook-form';
+import { useEffect, useRef, useState } from 'react';
+import { useFieldArray, useForm, type Resolver } from 'react-hook-form';
 import { yupResolver } from '@hookform/resolvers/yup';
 import * as yup from 'yup';
-import { prepareImage } from '../lib/prepareImage';
-import { preloadBackgroundRemover, replaceBackgroundWithBlue, type BgProgress } from '../lib/removeBackground';
+import PhotoPicker, { type PhotoValue } from './PhotoPicker';
 
-// Validation schema
-const schema = yup.object().shape({
-    traiChu: yup.string().required('Tên Trai Chủ là bắt buộc'),
-    phapDanhTraiChu: yup.string(),
-    tuoiTraiChu: yup.string(),
-    diaChi: yup.string(),
+const MAX_HUONG_LINH = 10;
 
+// Thông tin của 1 hương linh
+const huongLinhSchema = yup.object({
     huongLinh: yup.string().required('Tên Hương Linh là bắt buộc'),
     phapDanhHuongLinh: yup.string(),
     namSinh: yup.string()
@@ -38,158 +34,133 @@ const schema = yup.object().shape({
         ),
     noiAnTang: yup.string(),
     tomTatTieuSu: yup.string(),
+});
 
+// Validation schema: 1 trai chủ + nhiều hương linh, thời gian ký gửi chọn chung
+const schema = yup.object({
+    traiChu: yup.string().required('Tên Trai Chủ là bắt buộc'),
+    phapDanhTraiChu: yup.string(),
+    tuoiTraiChu: yup.string(),
+    diaChi: yup.string(),
+    huongLinhs: yup.array().of(huongLinhSchema).min(1).max(MAX_HUONG_LINH).required(),
     thoiGianKyGui: yup.string().oneOf(['coThoiHan', 'khongThoiHan']).required('Vui lòng chọn thời gian ký gửi'),
 });
 
 type FormData = yup.InferType<typeof schema>;
+type HuongLinhData = FormData['huongLinhs'][number];
+
+const emptyHuongLinh: HuongLinhData = {
+    huongLinh: '', phapDanhHuongLinh: '', namSinh: '', namMatDuongLich: '', namMatAmLich: '',
+    gioMat: '', huongTho: '', noiAnTang: '', tomTatTieuSu: '',
+};
+
+type Result = { name: string; framedImage: string | null };
 
 export default function FormContainer() {
     const [isSubmitting, setIsSubmitting] = useState(false);
-    const [submitSuccess, setSubmitSuccess] = useState(false);
-    const [framedImage, setFramedImage] = useState<string | null>(null); // ảnh thờ có khung server trả về
-    const [submittedName, setSubmittedName] = useState('');
-    const [isPreparingImage, setIsPreparingImage] = useState(false);
-    const [originalFile, setOriginalFile] = useState<File | null>(null); // ảnh gốc đã xoay + nén
-    const [blueFile, setBlueFile] = useState<File | null>(null); // ảnh đã xoá nền, thay phông xanh
-    const [useBlueBg, setUseBlueBg] = useState(true);
-    const [bgStatus, setBgStatus] = useState<'idle' | 'loading' | 'processing' | 'failed'>('idle');
-    const [bgPercent, setBgPercent] = useState<number | null>(null);
-    const bgJobRef = useRef(0);
-    const [imageError, setImageError] = useState<string | null>(null);
+    const [sendProgress, setSendProgress] = useState<{ current: number; total: number } | null>(null);
+    const [results, setResults] = useState<Result[] | null>(null); // có giá trị = đã gửi xong tất cả
+    const [sent, setSent] = useState<Record<string, Result>>({}); // hương linh đã gửi thành công (theo id thẻ)
+    const [photos, setPhotos] = useState<Record<string, PhotoValue>>({});
     const [triedSubmit, setTriedSubmit] = useState(false);
     const [isTouchDevice, setIsTouchDevice] = useState(false);
-    const [isDragging, setIsDragging] = useState(false);
-    const galleryInputRef = useRef<HTMLInputElement>(null);
-    const cameraInputRef = useRef<HTMLInputElement>(null);
+    const submitTimeRef = useRef<string | null>(null);
 
     // Chỉ điện thoại / máy tính bảng mới hiện nút "Chụp ảnh" (máy tính bỏ qua thuộc tính capture).
     useEffect(() => {
         setIsTouchDevice(window.matchMedia('(pointer: coarse)').matches);
     }, []);
 
-    // Ảnh sẽ gửi đi và hiện xem trước: ảnh phông xanh nếu đã có và đang bật, ngược lại là ảnh gốc.
-    const selectedFile = useBlueBg && blueFile ? blueFile : originalFile;
-    const previewImage = useMemo(() => (selectedFile ? URL.createObjectURL(selectedFile) : null), [selectedFile]);
-    useEffect(() => () => { if (previewImage) URL.revokeObjectURL(previewImage); }, [previewImage]);
-    const isBgBusy = bgStatus === 'loading' || bgStatus === 'processing';
-    const isImageBusy = isPreparingImage || isBgBusy;
-
-    const { register, handleSubmit, reset, getValues, formState: { errors } } = useForm<FormData>({
-        // @ts-expect-error - yupResolver types mismatch with this specific yup version
-        resolver: yupResolver(schema),
+    const { register, control, handleSubmit, reset, getValues, formState: { errors } } = useForm<FormData>({
+        // yupResolver suy kiểu không khớp với bản yup đang dùng → ép về đúng kiểu form
+        resolver: yupResolver(schema) as unknown as Resolver<FormData>,
         defaultValues: {
-            thoiGianKyGui: 'coThoiHan' // default
-        }
+            huongLinhs: [emptyHuongLinh],
+            thoiGianKyGui: 'coThoiHan', // default
+        },
     });
+    const { fields, append, remove } = useFieldArray({ control, name: 'huongLinhs' });
+
+    const anyPhotoBusy = fields.some((f) => photos[f.id]?.busy);
 
     const onSubmit = async (data: FormData) => {
-        if (isImageBusy) {
-            alert("Ảnh đang được xử lý, vui lòng đợi trong giây lát rồi bấm lại");
+        if (anyPhotoBusy) {
+            alert('Ảnh đang được xử lý, vui lòng đợi trong giây lát rồi bấm lại');
             return;
         }
-        if (!selectedFile) {
-            alert("Vui lòng tải lên 1 tấm Di Ảnh của vị Hương Linh");
+        const missing = fields.findIndex((f) => !photos[f.id]?.image);
+        if (missing >= 0) {
+            alert(`Vui lòng tải lên di ảnh cho Hương Linh thứ ${missing + 1}`);
             return;
         }
 
         setIsSubmitting(true);
+        // Mọi hương linh trong cùng lần đăng ký dùng chung thời gian đăng ký.
+        submitTimeRef.current ??= new Date().toLocaleString('vi-VN');
+        const done: Record<string, Result> = { ...sent };
         try {
-            // Create FormData to send both text and file
-            const formData = new FormData();
-            Object.entries(data).forEach(([key, value]) => {
-                if (value) formData.append(key, value as string);
-            });
-            formData.append('image', selectedFile); // ảnh dùng để ghép khung
-            if (originalFile && selectedFile !== originalFile) {
-                formData.append('originalImage', originalFile); // lưu vào cột "Ảnh Gốc"
+            // Gửi lần lượt từng hương linh (mỗi lần 2 ảnh, không vượt giới hạn 4,5 MB của Vercel).
+            for (let i = 0; i < fields.length; i++) {
+                const id = fields[i].id;
+                if (done[id]) continue; // đã gửi ở lần trước → không gửi trùng
+                setSendProgress({ current: i + 1, total: fields.length });
+
+                const hl = data.huongLinhs[i];
+                const photo = photos[id];
+                const formData = new FormData();
+                const fieldsToSend: Record<string, string | undefined> = {
+                    traiChu: data.traiChu,
+                    phapDanhTraiChu: data.phapDanhTraiChu,
+                    tuoiTraiChu: data.tuoiTraiChu,
+                    diaChi: data.diaChi,
+                    ...hl,
+                    thoiGianKyGui: data.thoiGianKyGui,
+                    ngayDangKy: submitTimeRef.current,
+                };
+                Object.entries(fieldsToSend).forEach(([key, value]) => {
+                    if (value) formData.append(key, value);
+                });
+                formData.append('image', photo.image as File); // ảnh dùng để ghép khung
+                if (photo.original && photo.original !== photo.image) {
+                    formData.append('originalImage', photo.original); // lưu vào cột "Ảnh Gốc"
+                }
+
+                const response = await fetch('/api/submit', { method: 'POST', body: formData });
+                if (!response.ok) throw new Error(`Gửi hương linh "${hl.huongLinh}" thất bại`);
+                const json = await response.json().catch(() => ({}));
+                done[id] = { name: hl.huongLinh, framedImage: typeof json.framedImage === 'string' ? json.framedImage : null };
+                setSent({ ...done });
             }
-            // Append real-time registration date
-            formData.append('ngayDangKy', new Date().toLocaleString('vi-VN'));
-
-            // In real APP: send to /api/process
-            console.log('Form data to submit', Object.fromEntries(formData.entries()));
-
-            const response = await fetch('/api/submit', {
-                method: 'POST',
-                body: formData,
-            });
-
-            if (!response.ok) {
-                throw new Error('API submission failed');
-            }
-
-            const result = await response.json().catch(() => ({}));
-            setFramedImage(typeof result.framedImage === 'string' ? result.framedImage : null);
-            setSubmittedName(data.huongLinh || '');
-            setSubmitSuccess(true);
+            setResults(fields.map((f) => done[f.id]));
             window.scrollTo({ top: 0, behavior: 'smooth' });
         } catch (error) {
             console.error(error);
-            alert('Đã xảy ra lỗi khi gửi. Vui lòng thử lại!');
+            const count = Object.keys(done).length;
+            alert(count > 0
+                ? `Đã gửi được ${count}/${fields.length} hương linh. Phần còn lại bị lỗi khi gửi — vui lòng bấm "Hoàn tất đăng ký" lần nữa để gửi tiếp (hương linh đã gửi sẽ không bị gửi lại).`
+                : 'Đã xảy ra lỗi khi gửi. Vui lòng thử lại!');
         } finally {
             setIsSubmitting(false);
+            setSendProgress(null);
         }
     };
 
-    // Xoay đúng chiều + thu nhỏ + nén ảnh ngay trên máy rồi mới dùng làm di ảnh.
-    const handleFile = async (file?: File | null) => {
-        if (!file) return;
-        if (file.type && !file.type.startsWith('image/')) {
-            setImageError('Vui lòng chọn tệp ảnh (JPG, PNG).');
-            return;
-        }
-        setImageError(null);
-        setIsPreparingImage(true);
-        preloadBackgroundRemover();
-        try {
-            const prepared = await prepareImage(file);
-            setOriginalFile(prepared);
-            setBlueFile(null);
-            setBgStatus('idle');
-            if (useBlueBg) void runBlueBackground(prepared);
-        } catch (err) {
-            setImageError(err instanceof Error ? err.message : 'Không đọc được ảnh, vui lòng chọn ảnh khác.');
-        } finally {
-            setIsPreparingImage(false);
-        }
-    };
-
-    // Xoá nền + thay phông xanh (chạy trong trình duyệt). Lỗi thì giữ ảnh gốc.
-    const runBlueBackground = async (photo: File) => {
-        const job = ++bgJobRef.current;
-        setBgStatus('loading');
-        setBgPercent(null);
-        const onProgress = (p: BgProgress) => {
-            if (job !== bgJobRef.current) return;
-            setBgStatus(p.stage);
-            if (p.percent !== undefined) setBgPercent(p.percent);
-        };
-        for (let attempt = 1; attempt <= 2; attempt++) { // mạng chập chờn: tự thử lại 1 lần
-            try {
-                const result = await replaceBackgroundWithBlue(photo, onProgress);
-                if (job !== bgJobRef.current) return; // đã chọn ảnh khác trong lúc chờ
-                setBlueFile(result);
-                setBgStatus('idle');
-                return;
-            } catch (err) {
-                console.error(`Tách nền thất bại (lần ${attempt}):`, err);
-                if (job !== bgJobRef.current) return;
-            }
-        }
-        setBgStatus('failed');
-    };
-
-    const toggleBlueBg = (checked: boolean) => {
-        setUseBlueBg(checked);
-        if (checked && originalFile && !blueFile && !isBgBusy) void runBlueBackground(originalFile);
+    const removeHuongLinh = (index: number) => {
+        const id = fields[index].id;
+        const name = getValues(`huongLinhs.${index}.huongLinh`);
+        if ((name || photos[id]?.image) && !window.confirm(`Xóa Hương Linh thứ ${index + 1}${name ? ` (${name})` : ''} khỏi đơn đăng ký?`)) return;
+        remove(index);
+        setPhotos((prev) => {
+            const next = { ...prev };
+            delete next[id];
+            return next;
+        });
     };
 
     // Lưu ảnh thờ: điện thoại mở bảng chia sẻ (có "Lưu ảnh"), máy tính tải file về.
-    const saveFramedImage = async () => {
-        if (!framedImage) return;
-        const blob = await (await fetch(framedImage)).blob();
-        const slug = submittedName.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D')
+    const saveFramedImage = async (dataUrl: string, name: string) => {
+        const blob = await (await fetch(dataUrl)).blob();
+        const slug = name.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D')
             .replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase();
         const fileName = `anh-tho-${slug || 'huong-linh'}.jpg`;
         const file = new File([blob], fileName, { type: 'image/jpeg' });
@@ -211,7 +182,7 @@ export default function FormContainer() {
         setTimeout(() => URL.revokeObjectURL(url), 10000);
     };
 
-    // Đăng ký thêm hương linh: giữ lại thông tin trai chủ, xoá phần hương linh và ảnh.
+    // Đăng ký lần mới: giữ lại thông tin trai chủ, bắt đầu lại phần hương linh.
     const startNextRegistration = () => {
         const v = getValues();
         reset({
@@ -219,37 +190,18 @@ export default function FormContainer() {
             phapDanhTraiChu: v.phapDanhTraiChu,
             tuoiTraiChu: v.tuoiTraiChu,
             diaChi: v.diaChi,
+            huongLinhs: [emptyHuongLinh],
             thoiGianKyGui: v.thoiGianKyGui,
         });
-        bgJobRef.current++;
-        setOriginalFile(null);
-        setBlueFile(null);
-        setBgStatus('idle');
-        setImageError(null);
+        setPhotos({});
+        setSent({});
+        setResults(null);
         setTriedSubmit(false);
-        setFramedImage(null);
-        setSubmitSuccess(false);
+        submitTimeRef.current = null;
         window.scrollTo({ top: 0, behavior: 'smooth' });
     };
 
-    const openPicker = (input: HTMLInputElement | null) => {
-        preloadBackgroundRemover(); // tải sẵn bộ tách nền trong lúc người dùng chọn ảnh
-        input?.click();
-    };
-
-    const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        e.target.value = ''; // cho phép chọn lại cùng một ảnh
-        void handleFile(file);
-    };
-
-    const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
-        e.preventDefault();
-        setIsDragging(false);
-        void handleFile(e.dataTransfer.files?.[0]);
-    };
-
-    if (submitSuccess) {
+    if (results) {
         return (
             <div className="text-center py-10">
                 <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-6">
@@ -259,29 +211,31 @@ export default function FormContainer() {
                 </div>
                 <h2 className="text-2xl font-bold text-gray-800 mb-2">Đăng Ký Thành Công!</h2>
                 <p className="text-gray-600 mb-6">
-                    Thông tin Hương Linh đã được tiếp nhận và chuyển đến Thiền Viện Trúc Lâm Chính Pháp.
+                    Thông tin {results.length > 1 ? `${results.length} Hương Linh` : 'Hương Linh'} đã được tiếp nhận và chuyển đến Thiền Viện Trúc Lâm Chính Pháp.
                 </p>
 
-                {framedImage && (
-                    <div className="mb-8">
-                        <img
-                            src={framedImage}
-                            alt={`Ảnh thờ ${submittedName}`}
-                            className="mx-auto w-full max-w-xs rounded-lg shadow-lg border border-orange-200"
-                        />
-                        <button
-                            type="button"
-                            onClick={() => void saveFramedImage()}
-                            className="mt-4 w-full max-w-xs py-3 rounded-xl bg-buddhist-orange text-white font-semibold shadow-sm active:scale-[0.98]"
-                        >
-                            ⬇️ Lưu ảnh thờ về máy
-                        </button>
-                        <p className="text-xs text-gray-500 mt-2 max-w-xs mx-auto">
-                            Nếu không lưu được (ví dụ khi mở trong Zalo), hãy nhấn giữ vào ảnh rồi chọn &quot;Lưu ảnh&quot;.
-                            Nhà chùa sẽ kiểm tra lại trước khi in ảnh đặt lên bàn thờ.
-                        </p>
-                    </div>
-                )}
+                <div className={`grid gap-8 mb-6 ${results.length > 1 ? 'md:grid-cols-2' : ''}`}>
+                    {results.map((r, i) => r.framedImage && (
+                        <div key={i}>
+                            <img
+                                src={r.framedImage}
+                                alt={`Ảnh thờ ${r.name}`}
+                                className="mx-auto w-full max-w-xs rounded-lg shadow-lg border border-orange-200"
+                            />
+                            <button
+                                type="button"
+                                onClick={() => void saveFramedImage(r.framedImage as string, r.name)}
+                                className="mt-4 w-full max-w-xs py-3 rounded-xl bg-buddhist-orange text-white font-semibold shadow-sm active:scale-[0.98]"
+                            >
+                                ⬇️ Lưu ảnh thờ {results.length > 1 ? r.name : 'về máy'}
+                            </button>
+                        </div>
+                    ))}
+                </div>
+                <p className="text-xs text-gray-500 mb-8 max-w-sm mx-auto">
+                    Nếu không lưu được (ví dụ khi mở trong Zalo), hãy nhấn giữ vào ảnh rồi chọn &quot;Lưu ảnh&quot;.
+                    Nhà chùa sẽ kiểm tra lại trước khi in ảnh đặt lên bàn thờ.
+                </p>
 
                 <button
                     onClick={startNextRegistration}
@@ -294,8 +248,9 @@ export default function FormContainer() {
     }
 
     // Common input styling class
-    const inputClass = "w-full px-4 py-3 bg-white/50 border border-orange-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-buddhist-orange focus:border-transparent transition-all";
+    const inputClass = "w-full px-4 py-3 bg-white/50 border border-orange-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-buddhist-orange focus:border-transparent transition-all disabled:bg-gray-100";
     const labelClass = "block text-sm font-semibold text-buddhist-dark/80 mb-2";
+    const total = fields.length;
 
     return (
         <form className="space-y-8">
@@ -316,7 +271,7 @@ export default function FormContainer() {
                     </div>
                     <div>
                         <label className={labelClass}>Tuổi</label>
-                        <input {...register("tuoiTraiChu")} type="number" className={inputClass} placeholder="e.g. 45" />
+                        <input {...register("tuoiTraiChu")} type="number" className={inputClass} placeholder="VD: 45" />
                     </div>
                     <div>
                         <label className={labelClass}>Địa Chỉ</label>
@@ -325,213 +280,150 @@ export default function FormContainer() {
                 </div>
             </div>
 
-            {/* Section 2: Hương Linh */}
+            {/* Section 2: Hương Linh (một hoặc nhiều) */}
             <div className="bg-orange-50/50 p-6 rounded-2xl border border-orange-100/50 relative overflow-hidden">
                 <div className="absolute top-0 left-0 w-1 h-full bg-buddhist-red"></div>
-                <h3 className="text-xl font-bold text-buddhist-dark mb-4 border-b border-orange-200 pb-2">2. Thông tin Hương Linh</h3>
+                <h3 className="text-xl font-bold text-buddhist-dark mb-1 border-b border-orange-200 pb-2">2. Thông tin Hương Linh</h3>
+                <p className="text-xs text-gray-500 mb-4">Một trai chủ có thể đăng ký nhiều hương linh: bấm &quot;Thêm hương linh&quot; ở cuối mục này.</p>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mb-6">
-                    <div className="md:col-span-2">
-                        <label className={labelClass}>Tên Hương Linh <span className="text-red-500">*</span></label>
-                        <input {...register("huongLinh")} className={inputClass} placeholder="Họ và Tên người mất" />
-                        {errors.huongLinh && <p className="text-red-500 text-xs mt-1">{errors.huongLinh.message}</p>}
-                    </div>
-
-                    <div>
-                        <label className={labelClass}>Pháp Danh Hương Linh</label>
-                        <input {...register("phapDanhHuongLinh")} className={inputClass} />
-                    </div>
-                    <div>
-                        <label className={labelClass}>Hưởng thọ/dương (số tuổi)</label>
-                        <input {...register("huongTho")} inputMode="numeric" className={inputClass} placeholder="VD: 75" />
-                        <p className="text-gray-500 text-xs mt-1 italic">Không rõ tuổi thì bỏ trống</p>
-                        {errors.huongTho && <p className="text-red-500 text-xs mt-1">{errors.huongTho.message}</p>}
-                    </div>
-
-                    <div>
-                        <label className={labelClass}>Năm Sinh</label>
-                        <input {...register("namSinh")} inputMode="numeric" className={inputClass} placeholder="VD: 1950" />
-                        <p className="text-gray-500 text-xs mt-1 italic">Không rõ năm sinh thì bỏ trống</p>
-                        {errors.namSinh && <p className="text-red-500 text-xs mt-1">{errors.namSinh.message}</p>}
-                    </div>
-                    <div>
-                        <label className={labelClass}>Giờ Mất</label>
-                        <input {...register("gioMat")} className={inputClass} placeholder="e.g. 10:30 Sáng" />
-                    </div>
-
-                    <div>
-                        <label className={labelClass}>Năm Mất Dương Lịch</label>
-                        <input {...register("namMatDuongLich")} className={inputClass} placeholder="e.g. 2025" />
-                    </div>
-                    <div>
-                        <label className={labelClass}>Năm Mất Âm Lịch</label>
-                        <input {...register("namMatAmLich")} className={inputClass} placeholder="Viết chữ, ví dụ: Ất Tỵ" />
-                        {errors.namMatAmLich && <p className="text-red-500 text-xs mt-1">{errors.namMatAmLich.message}</p>}
-                    </div>
-
-                    <div className="md:col-span-2">
-                        <label className={labelClass}>Nơi An Táng</label>
-                        <input {...register("noiAnTang")} className={inputClass} placeholder="Nghĩa trang..." />
-                    </div>
-
-                    <div className="md:col-span-2">
-                        <label className={labelClass}>Tóm tắt tiểu sử hương linh</label>
-                        <textarea {...register("tomTatTieuSu")} className={`${inputClass} min-h-[100px] resize-y`} placeholder="nhập thông tin tiểu sử của hương linh (như điếu văn)" />
-                    </div>
-                </div>
-
-                {/* Section: Upload Photos & Realtime info */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start mt-8 pt-6 border-t border-orange-200/60">
-
-                    {/* Photo Upload Box */}
-                    <div>
-                        <label className={labelClass}>Di Ảnh (4x6) <span className="text-red-500">*</span></label>
-                        <p className="text-xs text-buddhist-frame mb-3">
-                            Chọn ảnh rõ mặt, chụp thẳng. Ảnh sẽ tự xoay đúng chiều, xóa nền và thay phông xanh để làm ảnh thờ.
-                        </p>
-
-                        {/* Ô chọn ảnh ẩn: thư viện ảnh / tệp trên máy */}
-                        <input
-                            ref={galleryInputRef}
-                            type="file"
-                            accept="image/*"
-                            onChange={handleImageChange}
-                            className="hidden"
-                        />
-                        {/* Ô chọn ảnh ẩn: mở thẳng camera sau của điện thoại */}
-                        <input
-                            ref={cameraInputRef}
-                            type="file"
-                            accept="image/*"
-                            capture="environment"
-                            onChange={handleImageChange}
-                            className="hidden"
-                        />
-
-                        <div
-                            role="button"
-                            tabIndex={0}
-                            onClick={() => openPicker(galleryInputRef.current)}
-                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') openPicker(galleryInputRef.current); }}
-                            onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-                            onDragLeave={() => setIsDragging(false)}
-                            onDrop={handleDrop}
-                            className={`relative border-2 border-dashed rounded-xl p-6 flex flex-col items-center justify-center text-center transition-colors cursor-pointer
-                           ${isDragging ? 'border-buddhist-orange bg-orange-100' : previewImage ? 'border-buddhist-orange bg-orange-50' : 'border-gray-300 hover:bg-gray-50 bg-white'}`}>
-
-                            {previewImage ? (
-                                <div className="relative w-40 aspect-[31/50] rounded-lg overflow-hidden border border-orange-200 shadow-sm">
-                                    <img src={previewImage} alt="Di ảnh đã chọn" className="w-full h-full object-cover" />
-                                </div>
-                            ) : (
-                                <div className="py-6">
-                                    <svg className="w-12 h-12 text-gray-400 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-                                    </svg>
-                                    <p className="text-sm font-medium text-gray-600">
-                                        {isTouchDevice ? 'Chạm để chọn ảnh' : 'Nhấn để chọn ảnh hoặc kéo thả ảnh vào đây'}
-                                    </p>
-                                    <p className="text-xs text-gray-400 mt-1">Hỗ trợ ảnh JPG, PNG</p>
-                                </div>
-                            )}
-
-                            {isImageBusy && (
-                                <div className="absolute inset-0 bg-white/85 rounded-xl flex flex-col items-center justify-center px-4 gap-1">
-                                    <span className="text-sm font-semibold text-buddhist-orange">
-                                        {isPreparingImage
-                                            ? 'Đang xử lý ảnh...'
-                                            : bgStatus === 'loading'
-                                                ? `Đang tải bộ tách nền${bgPercent !== null ? ` ${bgPercent}%` : ''}...`
-                                                : 'Đang xóa nền, thay phông xanh...'}
-                                    </span>
-                                    {bgStatus === 'loading' && !isPreparingImage && (
-                                        <span className="text-xs text-gray-500">Chỉ lần đầu mới phải tải, vui lòng chờ</span>
+                <div className="space-y-6">
+                    {fields.map((field, index) => {
+                        const isSent = !!sent[field.id];
+                        const e = errors.huongLinhs?.[index];
+                        return (
+                            <div key={field.id} className="bg-white/70 border border-orange-200 rounded-2xl p-4 md:p-5">
+                                <div className="flex items-center justify-between mb-4">
+                                    <h4 className="font-bold text-buddhist-dark">
+                                        Hương Linh {total > 1 ? `thứ ${index + 1}` : ''}
+                                        {isSent && <span className="ml-2 text-xs font-semibold text-green-700 bg-green-100 px-2 py-0.5 rounded-full">✓ Đã gửi</span>}
+                                    </h4>
+                                    {total > 1 && !isSent && (
+                                        <button
+                                            type="button"
+                                            onClick={() => removeHuongLinh(index)}
+                                            disabled={isSubmitting}
+                                            className="text-sm text-red-600 font-semibold px-3 py-1 rounded-lg hover:bg-red-50"
+                                        >
+                                            ✕ Xóa
+                                        </button>
                                     )}
                                 </div>
-                            )}
-                        </div>
 
-                        <div className={`grid gap-3 mt-3 ${isTouchDevice ? 'grid-cols-2' : 'grid-cols-1'}`}>
-                            {isTouchDevice && (
-                                <button
-                                    type="button"
-                                    onClick={() => openPicker(cameraInputRef.current)}
-                                    disabled={isImageBusy}
-                                    className="flex items-center justify-center gap-2 py-3 rounded-xl bg-buddhist-orange text-white font-semibold shadow-sm active:scale-[0.98] disabled:opacity-60"
-                                >
-                                    📷 Chụp ảnh
-                                </button>
-                            )}
-                            <button
-                                type="button"
-                                onClick={() => openPicker(galleryInputRef.current)}
-                                disabled={isImageBusy}
-                                className="flex items-center justify-center gap-2 py-3 rounded-xl border border-buddhist-orange text-buddhist-orange bg-white font-semibold shadow-sm active:scale-[0.98] disabled:opacity-60"
-                            >
-                                🖼️ {selectedFile ? 'Đổi ảnh' : isTouchDevice ? 'Chọn ảnh' : 'Chọn ảnh từ máy'}
-                            </button>
-                        </div>
+                                <fieldset disabled={isSent || isSubmitting} className="contents">
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mb-6">
+                                        <div className="md:col-span-2">
+                                            <label className={labelClass}>Tên Hương Linh <span className="text-red-500">*</span></label>
+                                            <input {...register(`huongLinhs.${index}.huongLinh`)} className={inputClass} placeholder="Họ và Tên người mất" />
+                                            {e?.huongLinh && <p className="text-red-500 text-xs mt-1">{e.huongLinh.message}</p>}
+                                        </div>
 
-                        <label className="flex items-start gap-2 mt-3 cursor-pointer select-none">
-                            <input
-                                type="checkbox"
-                                checked={useBlueBg}
-                                onChange={(e) => toggleBlueBg(e.target.checked)}
-                                className="mt-0.5 w-5 h-5 accent-buddhist-orange"
-                            />
-                            <span className="text-sm text-gray-700">Xóa nền, thay phông xanh cho ảnh thờ <span className="text-gray-400">(nên dùng)</span></span>
+                                        <div>
+                                            <label className={labelClass}>Pháp Danh Hương Linh</label>
+                                            <input {...register(`huongLinhs.${index}.phapDanhHuongLinh`)} className={inputClass} />
+                                        </div>
+                                        <div>
+                                            <label className={labelClass}>Hưởng thọ/dương (số tuổi)</label>
+                                            <input {...register(`huongLinhs.${index}.huongTho`)} inputMode="numeric" className={inputClass} placeholder="VD: 75" />
+                                            <p className="text-gray-500 text-xs mt-1 italic">Không rõ tuổi thì bỏ trống</p>
+                                            {e?.huongTho && <p className="text-red-500 text-xs mt-1">{e.huongTho.message}</p>}
+                                        </div>
+
+                                        <div>
+                                            <label className={labelClass}>Năm Sinh</label>
+                                            <input {...register(`huongLinhs.${index}.namSinh`)} inputMode="numeric" className={inputClass} placeholder="VD: 1950" />
+                                            <p className="text-gray-500 text-xs mt-1 italic">Không rõ năm sinh thì bỏ trống</p>
+                                            {e?.namSinh && <p className="text-red-500 text-xs mt-1">{e.namSinh.message}</p>}
+                                        </div>
+                                        <div>
+                                            <label className={labelClass}>Giờ Mất</label>
+                                            <input {...register(`huongLinhs.${index}.gioMat`)} className={inputClass} placeholder="VD: 10:30 sáng" />
+                                        </div>
+
+                                        <div>
+                                            <label className={labelClass}>Năm Mất Dương Lịch</label>
+                                            <input {...register(`huongLinhs.${index}.namMatDuongLich`)} inputMode="numeric" className={inputClass} placeholder="VD: 2025" />
+                                        </div>
+                                        <div>
+                                            <label className={labelClass}>Năm Mất Âm Lịch</label>
+                                            <input {...register(`huongLinhs.${index}.namMatAmLich`)} className={inputClass} placeholder="Viết chữ, ví dụ: Ất Tỵ" />
+                                            {e?.namMatAmLich && <p className="text-red-500 text-xs mt-1">{e.namMatAmLich.message}</p>}
+                                        </div>
+
+                                        <div className="md:col-span-2">
+                                            <label className={labelClass}>Nơi An Táng</label>
+                                            <input {...register(`huongLinhs.${index}.noiAnTang`)} className={inputClass} placeholder="Nghĩa trang..." />
+                                        </div>
+
+                                        <div className="md:col-span-2">
+                                            <label className={labelClass}>Tóm tắt tiểu sử hương linh</label>
+                                            <textarea {...register(`huongLinhs.${index}.tomTatTieuSu`)} className={`${inputClass} min-h-[100px] resize-y`} placeholder="Nhập thông tin tiểu sử của hương linh (như điếu văn)" />
+                                        </div>
+                                    </div>
+                                </fieldset>
+
+                                <div className="md:w-1/2 pt-4 border-t border-orange-200/60">
+                                    <PhotoPicker
+                                        isTouchDevice={isTouchDevice}
+                                        showMissingError={triedSubmit}
+                                        disabled={isSent || isSubmitting}
+                                        onChange={(value) => setPhotos((prev) => ({ ...prev, [field.id]: value }))}
+                                    />
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+
+                {total < MAX_HUONG_LINH ? (
+                    <button
+                        type="button"
+                        onClick={() => append(emptyHuongLinh)}
+                        disabled={isSubmitting}
+                        className="mt-6 w-full py-4 rounded-2xl border-2 border-dashed border-buddhist-orange text-buddhist-orange font-bold bg-white hover:bg-orange-50 active:scale-[0.99] transition"
+                    >
+                        ➕ Thêm hương linh
+                    </button>
+                ) : (
+                    <p className="mt-6 text-sm text-gray-500 text-center">Mỗi lần đăng ký tối đa {MAX_HUONG_LINH} hương linh.</p>
+                )}
+            </div>
+
+            {/* Section 3: Thời gian ký gửi (chung cho tất cả hương linh) */}
+            <div className="bg-orange-50/50 p-6 rounded-2xl border border-orange-100/50 relative overflow-hidden">
+                <div className="absolute top-0 left-0 w-1 h-full bg-buddhist-orange"></div>
+                <h3 className="text-xl font-bold text-buddhist-dark mb-4 border-b border-orange-200 pb-2">3. Thời gian ký gửi</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="bg-white p-5 rounded-xl border border-orange-200">
+                        <label className={labelClass}>
+                            Thời gian ký gửi {total > 1 ? '(áp dụng cho tất cả hương linh)' : ''} <span className="text-red-500">*</span>
                         </label>
-                        {useBlueBg && bgStatus === 'failed' && (
-                            <p className="text-amber-600 text-xs mt-2">
-                                Không tách được nền tự động cho ảnh này, đang dùng ảnh gốc. Kiểm tra mạng rồi{' '}
-                                <button
-                                    type="button"
-                                    onClick={() => originalFile && void runBlueBackground(originalFile)}
-                                    className="underline font-semibold"
-                                >
-                                    thử lại
-                                </button>
-                                , hoặc chọn ảnh khác rõ mặt hơn.
-                            </p>
-                        )}
+                        <div className="space-y-3 mt-3">
+                            <label className="flex items-center space-x-3 cursor-pointer group">
+                                <input
+                                    type="radio"
+                                    value="coThoiHan"
+                                    {...register("thoiGianKyGui")}
+                                    className="w-5 h-5 text-buddhist-orange focus:ring-buddhist-orange border-gray-300 pointer-events-none"
+                                />
+                                <span className="text-gray-700 font-medium group-hover:text-black transition-colors">Ký gửi có thời hạn</span>
+                            </label>
 
-                        {imageError && <p className="text-red-500 text-xs mt-2">{imageError}</p>}
-                        {!imageError && triedSubmit && !selectedFile && <p className="text-red-500 text-xs mt-2">Vui lòng tải lên di ảnh</p>}
-                    </div>
-
-                    {/* Registration Info */}
-                    <div className="space-y-6">
-                        <div>
-                            <label className={labelClass}>Ngày đăng ký</label>
-                            <div className="px-4 py-3 bg-gray-50 text-gray-600 rounded-xl border border-gray-200 text-sm font-medium">
-                                Ghi tự động theo thời điểm bạn bấm gửi
-                            </div>
+                            <label className="flex items-center space-x-3 cursor-pointer group">
+                                <input
+                                    type="radio"
+                                    value="khongThoiHan"
+                                    {...register("thoiGianKyGui")}
+                                    className="w-5 h-5 text-buddhist-orange focus:ring-buddhist-orange border-gray-300 pointer-events-none"
+                                />
+                                <span className="text-gray-700 font-medium group-hover:text-black transition-colors">Ký gửi KHÔNG thời hạn</span>
+                            </label>
                         </div>
-
-                        <div className="bg-white p-5 rounded-xl border border-orange-200">
-                            <label className={labelClass}>Thời gian ký gửi <span className="text-red-500">*</span></label>
-                            <div className="space-y-3 mt-3">
-                                <label className="flex items-center space-x-3 cursor-pointer group">
-                                    <input
-                                        type="radio"
-                                        value="coThoiHan"
-                                        {...register("thoiGianKyGui")}
-                                        className="w-5 h-5 text-buddhist-orange focus:ring-buddhist-orange border-gray-300 pointer-events-none"
-                                    />
-                                    <span className="text-gray-700 font-medium group-hover:text-black transition-colors">Ký gửi có thời hạn</span>
-                                </label>
-
-                                <label className="flex items-center space-x-3 cursor-pointer group">
-                                    <input
-                                        type="radio"
-                                        value="khongThoiHan"
-                                        {...register("thoiGianKyGui")}
-                                        className="w-5 h-5 text-buddhist-orange focus:ring-buddhist-orange border-gray-300 pointer-events-none"
-                                    />
-                                    <span className="text-gray-700 font-medium group-hover:text-black transition-colors">Ký gửi KHÔNG thời hạn</span>
-                                </label>
-                            </div>
-                            {errors.thoiGianKyGui && <p className="text-red-500 text-xs mt-1">{errors.thoiGianKyGui.message}</p>}
+                        {errors.thoiGianKyGui && <p className="text-red-500 text-xs mt-1">{errors.thoiGianKyGui.message}</p>}
+                    </div>
+                    <div>
+                        <label className={labelClass}>Ngày đăng ký</label>
+                        <div className="px-4 py-3 bg-gray-50 text-gray-600 rounded-xl border border-gray-200 text-sm font-medium">
+                            Ghi tự động theo thời điểm bạn bấm gửi
                         </div>
                     </div>
                 </div>
@@ -542,10 +434,10 @@ export default function FormContainer() {
                 <button
                     onClick={() => {
                         setTriedSubmit(true);
-                        void handleSubmit(onSubmit as any)();
+                        void handleSubmit(onSubmit)();
                     }}
                     type="button"
-                    disabled={isSubmitting || isImageBusy}
+                    disabled={isSubmitting || anyPhotoBusy}
                     className={`w-full py-4 rounded-xl font-bold text-lg text-white shadow-lg transition-all duration-300 relative overflow-hidden group
             ${isSubmitting ? 'bg-orange-400 cursor-not-allowed' : 'bg-gradient-to-r from-buddhist-orange to-buddhist-red hover:shadow-orange-500/30 hover:-translate-y-1'}`}
                 >
@@ -555,12 +447,14 @@ export default function FormContainer() {
                                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                             </svg>
-                            ĐANG GỬI, VUI LÒNG CHỜ...
+                            {sendProgress && sendProgress.total > 1
+                                ? `ĐANG GỬI ${sendProgress.current}/${sendProgress.total}...`
+                                : 'ĐANG GỬI, VUI LÒNG CHỜ...'}
                         </span>
                     ) : (
                         <>
                             <span className="relative z-10 flex items-center justify-center gap-2">
-                                HOÀN TẤT ĐĂNG KÝ
+                                HOÀN TẤT ĐĂNG KÝ{total > 1 ? ` (${total} HƯƠNG LINH)` : ''}
                                 <svg className="w-5 h-5 group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
                                 </svg>
