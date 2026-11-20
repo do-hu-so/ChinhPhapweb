@@ -1,6 +1,7 @@
 /**
  * Apps Script nhận dữ liệu "Ký gửi Hương Linh" từ web (src/app/api/submit/route.ts).
- *  - Lưu ảnh gốc + ảnh có khung vào thư mục Google Drive riêng tư FOLDER_NAME.
+ *  - Lưu ảnh gốc + ảnh có khung vào thư mục Google Drive FOLDER_NAME
+ *    (PUBLIC_IMAGES = true: ai có link ảnh đều xem được).
  *  - Ghi 1 dòng vào Google Sheet theo TÊN CỘT ở dòng 1 (đổi thứ tự cột không bị lệch).
  *  - Trả JSON { success, framedUrl, originalUrl } đúng như route.ts đang chờ.
  *
@@ -21,6 +22,8 @@
 var SHEET_NAME = 'Trang tính1'; // tab nhận dữ liệu; không thấy thì dùng tab đầu tiên
 var FOLDER_NAME = 'Ảnh hương linh (ho_so)';
 var MAX_TEXT = 5000; // giới hạn độ dài mỗi ô
+// true: ai có link ảnh đều xem được (không cần đăng nhập). false: chỉ người được chia sẻ thư mục mới xem.
+var PUBLIC_IMAGES = true;
 
 // Tên cột trên Sheet → tên trường web gửi lên
 var COLUMN_MAP = {
@@ -117,7 +120,30 @@ function saveImage_(folder, base64, name) {
   var bytes = Utilities.base64Decode(base64);
   var isPng = bytes.length > 1 && bytes[0] === -119 && bytes[1] === 80; // 0x89 'P'
   var blob = Utilities.newBlob(bytes, isPng ? 'image/png' : 'image/jpeg', name + (isPng ? '.png' : '.jpg'));
-  return folder.createFile(blob).getUrl(); // file riêng tư: chỉ người có quyền vào thư mục mới xem được
+  var file = folder.createFile(blob);
+  if (PUBLIC_IMAGES) makePublic_(file);
+  return file.getUrl();
+}
+
+/** Cho phép bất kỳ ai có link xem ảnh. Lỗi chia sẻ không làm hỏng việc đăng ký. */
+function makePublic_(file) {
+  try {
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    return true;
+  } catch (err) {
+    console.error('Không chia sẻ công khai được ' + file.getName() + ': ' + err);
+    return false;
+  }
+}
+
+/** Chạy tay 1 lần: mở công khai (ai có link đều xem) cho toàn bộ ảnh ĐÃ có trong thư mục. */
+function chiaSeCongKhaiAnhDaCo() {
+  var files = getFolder_().getFiles();
+  var ok = 0, fail = 0;
+  while (files.hasNext()) {
+    if (makePublic_(files.next())) ok++; else fail++;
+  }
+  Logger.log('Đã mở công khai %s ảnh, lỗi %s ảnh', ok, fail);
 }
 
 function appendRow_(row) {
