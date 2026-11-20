@@ -4,21 +4,25 @@ import path from 'path';
 // import { google } from 'googleapis'; // Removed, now using Apps Script
 import sharp from 'sharp';
 import { createCanvas, loadImage, registerFont } from 'canvas';
+import { buildAgeLine, buildNameLine, buildYearsLine } from '../../lib/portraitText';
 
 export async function POST(req: Request) {
     try {
         const formData = await req.formData();
-        const imageFile = formData.get('image') as File;
+        // image: ảnh dùng để ghép khung (đã xoá nền, thay phông xanh nếu gia đình chọn)
+        // originalImage: ảnh gốc gia đình tải lên (không bắt buộc) — lưu vào cột "Ảnh Gốc"
+        const imageFile = formData.get('image');
+        const originalEntry = formData.get('originalImage');
 
-        if (!imageFile) {
+        if (!(imageFile instanceof File)) {
             return NextResponse.json({ error: 'No image provided' }, { status: 400 });
         }
 
         // Extract all text fields
         const data: Record<string, string> = {};
         formData.forEach((value, key) => {
-            if (key !== 'image') {
-                data[key] = value.toString();
+            if (typeof value === 'string') {
+                data[key] = value;
             }
         });
 
@@ -26,6 +30,7 @@ export async function POST(req: Request) {
 
         // 1. Image Compositing with Sharp and Canvas
         const imageBuffer = Buffer.from(await imageFile.arrayBuffer());
+        const originalBuffer = originalEntry instanceof File ? Buffer.from(await originalEntry.arrayBuffer()) : imageBuffer;
 
         // Load the template frame
         const framePath = path.join(process.cwd(), 'image', 'khung_tho_2.png');
@@ -77,66 +82,40 @@ export async function POST(req: Request) {
         ctx.globalCompositeOperation = 'source-over'; // reset
 
         // Nameplate always has a fixed height
-        let plateHeight = 220;
+        const plateHeight = 220;
         const plateY = safeY + safeH - plateHeight;
 
         // Solid light green background for readability
         ctx.fillStyle = '#4B8540';
         ctx.fillRect(safeX, plateY, safeW, plateHeight);
 
-        // Add Text to Nameplate
-        ctx.textAlign = 'center';
-        ctx.fillStyle = '#FFD700'; // Gold text
+        // Chữ trên biển tên: chỉ in thông tin có thật (bỏ các câu kiểu "không rõ năm sinh...").
+        // Dòng nào thiếu dữ liệu thì bỏ; các dòng còn lại được căn giữa theo chiều dọc.
+        const lines = [
+            { text: buildNameLine(data.huongLinh), weight: 'bold', size: 55, color: '#FFD700' },
+            { text: buildYearsLine(data.namSinh, data.namMatDuongLich, data.namMatAmLich), weight: 'normal', size: 35, color: '#FFFFFF' },
+            { text: buildAgeLine(data.huongTho), weight: 'normal', size: 40, color: '#FFD700' },
+        ].filter((line) => line.text);
 
-        ctx.font = 'bold 55px "Roboto", sans-serif';
-
-        // Auto-prepend "HƯƠNG LINH " if it doesn't exist
-        let huongLinhName = (data.huongLinh || '').trim().toUpperCase();
-        if (huongLinhName && !huongLinhName.includes('HƯƠNG LINH')) {
-            huongLinhName = `HƯƠNG LINH ${huongLinhName}`;
-        } else if (!huongLinhName) {
-            huongLinhName = 'HƯƠNG LINH';
-        }
-
-        ctx.fillText(huongLinhName, canvasW / 2, plateY + 60);
-
-        ctx.font = 'normal 35px "Roboto", sans-serif';
-        ctx.fillStyle = '#FFFFFF';
-
-        const birthYear = data.namSinh ? `Sinh năm: ${data.namSinh}` : '';
-
-        let deathYear = '';
-        if (data.namMatDuongLich && data.namMatAmLich) {
-            deathYear = `Mất năm: ${data.namMatDuongLich} (${data.namMatAmLich})`;
-        } else if (data.namMatDuongLich) {
-            deathYear = `Mất năm: ${data.namMatDuongLich}`;
-        } else if (data.namMatAmLich) {
-            // Just in case they only provide lunar year
-            deathYear = `Mất năm: ${data.namMatAmLich}`;
-        }
-
-        const yearsInfo = [birthYear, deathYear].filter(Boolean).join(' - ');
-
-        if (yearsInfo) {
-            ctx.fillText(yearsInfo, canvasW / 2, plateY + 110);
-        }
-
-        if (data.huongTho) {
-            ctx.fillStyle = '#FFD700';
-            ctx.font = 'normal 40px "Roboto", sans-serif';
-
-            let huongThoText = data.huongTho.trim();
-            // Nếu người dùng không nhập chữ "hưởng" (chỉ nhập số "34" hoặc "34 tuổi")
-            if (!huongThoText.toLowerCase().includes('hưởng')) {
-                const ageMatch = huongThoText.match(/\d+/);
-                const age = ageMatch ? parseInt(ageMatch[0]) : 0;
-                // Nhỏ hơn bằng 60 thường dùng Hưởng dương, ngược lại là Hưởng thọ
-                const prefix = (age > 0 && age <= 60) ? 'Hưởng dương' : 'Hưởng thọ';
-                const suffix = !huongThoText.toLowerCase().includes('tuổi') ? ' tuổi' : '';
-                huongThoText = `${prefix}: ${huongThoText}${suffix}`;
+        // Chữ dài thì thu nhỏ dần cho vừa băng tên (không để tràn khung).
+        const maxTextWidth = safeW - 60;
+        for (const line of lines) {
+            while (line.size > 26) {
+                ctx.font = `${line.weight} ${line.size}px "Roboto", sans-serif`;
+                if (ctx.measureText(line.text).width <= maxTextWidth) break;
+                line.size -= 2;
             }
+        }
 
-            ctx.fillText(huongThoText, canvasW / 2, plateY + 160);
+        const lineGap = 1.3;
+        const totalHeight = lines.reduce((sum, line) => sum + line.size * lineGap, 0);
+        let cursorY = plateY + (plateHeight - totalHeight) / 2;
+        ctx.textAlign = 'center';
+        for (const line of lines) {
+            ctx.font = `${line.weight} ${line.size}px "Roboto", sans-serif`;
+            ctx.fillStyle = line.color;
+            ctx.fillText(line.text, canvasW / 2, cursorY + line.size, maxTextWidth);
+            cursorY += line.size * lineGap;
         }
 
         // Final Composite Image Buffer
@@ -150,7 +129,7 @@ export async function POST(req: Request) {
         const randomId = Math.floor(Math.random() * 900) + 100; // 3-digit random number
         const payload = {
             baseFileName: data.huongLinh ? `${data.huongLinh}_${randomId}` : `HuongLinh_${randomId}`,
-            originalImageBase64: imageBuffer.toString('base64'),
+            originalImageBase64: originalBuffer.toString('base64'),
             framedImageBase64: finalImageBuffer.toString('base64'),
 
             traiChu: data.traiChu || '',

@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { yupResolver } from '@hookform/resolvers/yup';
 import * as yup from 'yup';
 import { prepareImage } from '../lib/prepareImage';
+import { preloadBackgroundRemover, replaceBackgroundWithBlue, type BgProgress } from '../lib/removeBackground';
 
 // Validation schema
 const schema = yup.object().shape({
@@ -15,7 +16,12 @@ const schema = yup.object().shape({
 
     huongLinh: yup.string().required('Tên Hương Linh là bắt buộc'),
     phapDanhHuongLinh: yup.string(),
-    namSinh: yup.string(),
+    namSinh: yup.string()
+        .test(
+            'year',
+            'Nhập năm sinh 4 chữ số (VD: 1950). Không rõ năm sinh thì bỏ trống',
+            value => !value || /(1[89]\d{2}|20\d{2})/.test(value)
+        ),
     namMatDuongLich: yup.string(),
     namMatAmLich: yup.string()
         .test(
@@ -24,7 +30,12 @@ const schema = yup.object().shape({
             value => !value || !/\d/.test(value)
         ),
     gioMat: yup.string(),
-    huongTho: yup.string().required('Hưởng thọ/Hưởng dương là bắt buộc'),
+    huongTho: yup.string()
+        .test(
+            'age-number',
+            'Chỉ nhập số tuổi (VD: 75). Không rõ tuổi thì bỏ trống',
+            value => !value || /\d/.test(value)
+        ),
     noiAnTang: yup.string(),
     tomTatTieuSu: yup.string(),
 
@@ -35,10 +46,14 @@ type FormData = yup.InferType<typeof schema>;
 
 export default function FormContainer() {
     const [isSubmitting, setIsSubmitting] = useState(false);
-    const [previewImage, setPreviewImage] = useState<string | null>(null);
-    const [selectedFile, setSelectedFile] = useState<File | null>(null);
     const [submitSuccess, setSubmitSuccess] = useState(false);
     const [isPreparingImage, setIsPreparingImage] = useState(false);
+    const [originalFile, setOriginalFile] = useState<File | null>(null); // ảnh gốc đã xoay + nén
+    const [blueFile, setBlueFile] = useState<File | null>(null); // ảnh đã xoá nền, thay phông xanh
+    const [useBlueBg, setUseBlueBg] = useState(true);
+    const [bgStatus, setBgStatus] = useState<'idle' | 'loading' | 'processing' | 'failed'>('idle');
+    const [bgPercent, setBgPercent] = useState<number | null>(null);
+    const bgJobRef = useRef(0);
     const [imageError, setImageError] = useState<string | null>(null);
     const [triedSubmit, setTriedSubmit] = useState(false);
     const [isTouchDevice, setIsTouchDevice] = useState(false);
@@ -51,6 +66,13 @@ export default function FormContainer() {
         setIsTouchDevice(window.matchMedia('(pointer: coarse)').matches);
     }, []);
 
+    // Ảnh sẽ gửi đi và hiện xem trước: ảnh phông xanh nếu đã có và đang bật, ngược lại là ảnh gốc.
+    const selectedFile = useBlueBg && blueFile ? blueFile : originalFile;
+    const previewImage = useMemo(() => (selectedFile ? URL.createObjectURL(selectedFile) : null), [selectedFile]);
+    useEffect(() => () => { if (previewImage) URL.revokeObjectURL(previewImage); }, [previewImage]);
+    const isBgBusy = bgStatus === 'loading' || bgStatus === 'processing';
+    const isImageBusy = isPreparingImage || isBgBusy;
+
     const { register, handleSubmit, formState: { errors } } = useForm<FormData>({
         // @ts-expect-error - yupResolver types mismatch with this specific yup version
         resolver: yupResolver(schema),
@@ -60,7 +82,7 @@ export default function FormContainer() {
     });
 
     const onSubmit = async (data: FormData) => {
-        if (isPreparingImage) {
+        if (isImageBusy) {
             alert("Ảnh đang được xử lý, vui lòng đợi trong giây lát rồi bấm lại");
             return;
         }
@@ -76,7 +98,10 @@ export default function FormContainer() {
             Object.entries(data).forEach(([key, value]) => {
                 if (value) formData.append(key, value as string);
             });
-            formData.append('image', selectedFile);
+            formData.append('image', selectedFile); // ảnh dùng để ghép khung
+            if (originalFile && selectedFile !== originalFile) {
+                formData.append('originalImage', originalFile); // lưu vào cột "Ảnh Gốc"
+            }
             // Append real-time registration date
             formData.append('ngayDangKy', new Date().toLocaleString('vi-VN'));
 
@@ -111,18 +136,53 @@ export default function FormContainer() {
         }
         setImageError(null);
         setIsPreparingImage(true);
+        preloadBackgroundRemover();
         try {
             const prepared = await prepareImage(file);
-            setSelectedFile(prepared);
-            setPreviewImage((old) => {
-                if (old) URL.revokeObjectURL(old);
-                return URL.createObjectURL(prepared);
-            });
+            setOriginalFile(prepared);
+            setBlueFile(null);
+            setBgStatus('idle');
+            if (useBlueBg) void runBlueBackground(prepared);
         } catch (err) {
             setImageError(err instanceof Error ? err.message : 'Không đọc được ảnh, vui lòng chọn ảnh khác.');
         } finally {
             setIsPreparingImage(false);
         }
+    };
+
+    // Xoá nền + thay phông xanh (chạy trong trình duyệt). Lỗi thì giữ ảnh gốc.
+    const runBlueBackground = async (photo: File) => {
+        const job = ++bgJobRef.current;
+        setBgStatus('loading');
+        setBgPercent(null);
+        const onProgress = (p: BgProgress) => {
+            if (job !== bgJobRef.current) return;
+            setBgStatus(p.stage);
+            if (p.percent !== undefined) setBgPercent(p.percent);
+        };
+        for (let attempt = 1; attempt <= 2; attempt++) { // mạng chập chờn: tự thử lại 1 lần
+            try {
+                const result = await replaceBackgroundWithBlue(photo, onProgress);
+                if (job !== bgJobRef.current) return; // đã chọn ảnh khác trong lúc chờ
+                setBlueFile(result);
+                setBgStatus('idle');
+                return;
+            } catch (err) {
+                console.error(`Tách nền thất bại (lần ${attempt}):`, err);
+                if (job !== bgJobRef.current) return;
+            }
+        }
+        setBgStatus('failed');
+    };
+
+    const toggleBlueBg = (checked: boolean) => {
+        setUseBlueBg(checked);
+        if (checked && originalFile && !blueFile && !isBgBusy) void runBlueBackground(originalFile);
+    };
+
+    const openPicker = (input: HTMLInputElement | null) => {
+        preloadBackgroundRemover(); // tải sẵn bộ tách nền trong lúc người dùng chọn ảnh
+        input?.click();
     };
 
     const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -208,14 +268,17 @@ export default function FormContainer() {
                         <input {...register("phapDanhHuongLinh")} className={inputClass} />
                     </div>
                     <div>
-                        <label className={labelClass}>Hưởng thọ/dương <span className="text-red-500">*</span></label>
-                        <input {...register("huongTho")} className={inputClass} placeholder="e.g. Hưởng thọ 75 tuổi" />
+                        <label className={labelClass}>Hưởng thọ/dương (số tuổi)</label>
+                        <input {...register("huongTho")} inputMode="numeric" className={inputClass} placeholder="VD: 75" />
+                        <p className="text-gray-500 text-xs mt-1 italic">Không rõ tuổi thì bỏ trống</p>
                         {errors.huongTho && <p className="text-red-500 text-xs mt-1">{errors.huongTho.message}</p>}
                     </div>
 
                     <div>
                         <label className={labelClass}>Năm Sinh</label>
-                        <input {...register("namSinh")} className={inputClass} placeholder="e.g. 1950" />
+                        <input {...register("namSinh")} inputMode="numeric" className={inputClass} placeholder="VD: 1950" />
+                        <p className="text-gray-500 text-xs mt-1 italic">Không rõ năm sinh thì bỏ trống</p>
+                        {errors.namSinh && <p className="text-red-500 text-xs mt-1">{errors.namSinh.message}</p>}
                     </div>
                     <div>
                         <label className={labelClass}>Giờ Mất</label>
@@ -250,7 +313,7 @@ export default function FormContainer() {
                     <div>
                         <label className={labelClass}>Di Ảnh (4x6) <span className="text-red-500">*</span></label>
                         <p className="text-xs text-buddhist-frame mb-3">
-                            Chọn ảnh rõ mặt, chụp thẳng. Ảnh sẽ tự xoay đúng chiều và được thu nhỏ trước khi gửi.
+                            Chọn ảnh rõ mặt, chụp thẳng. Ảnh sẽ tự xoay đúng chiều, xóa nền và thay phông xanh để làm ảnh thờ.
                         </p>
 
                         {/* Ô chọn ảnh ẩn: thư viện ảnh / tệp trên máy */}
@@ -274,8 +337,8 @@ export default function FormContainer() {
                         <div
                             role="button"
                             tabIndex={0}
-                            onClick={() => galleryInputRef.current?.click()}
-                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') galleryInputRef.current?.click(); }}
+                            onClick={() => openPicker(galleryInputRef.current)}
+                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') openPicker(galleryInputRef.current); }}
                             onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
                             onDragLeave={() => setIsDragging(false)}
                             onDrop={handleDrop}
@@ -283,7 +346,7 @@ export default function FormContainer() {
                            ${isDragging ? 'border-buddhist-orange bg-orange-100' : previewImage ? 'border-buddhist-orange bg-orange-50' : 'border-gray-300 hover:bg-gray-50 bg-white'}`}>
 
                             {previewImage ? (
-                                <div className="relative w-32 h-40 rounded-lg overflow-hidden border border-orange-200 shadow-sm">
+                                <div className="relative w-40 h-52 rounded-lg overflow-hidden border border-orange-200 shadow-sm">
                                     <img src={previewImage} alt="Di ảnh đã chọn" className="w-full h-full object-cover" />
                                 </div>
                             ) : (
@@ -298,9 +361,18 @@ export default function FormContainer() {
                                 </div>
                             )}
 
-                            {isPreparingImage && (
-                                <div className="absolute inset-0 bg-white/80 rounded-xl flex items-center justify-center">
-                                    <span className="text-sm font-semibold text-buddhist-orange">Đang xử lý ảnh...</span>
+                            {isImageBusy && (
+                                <div className="absolute inset-0 bg-white/85 rounded-xl flex flex-col items-center justify-center px-4 gap-1">
+                                    <span className="text-sm font-semibold text-buddhist-orange">
+                                        {isPreparingImage
+                                            ? 'Đang xử lý ảnh...'
+                                            : bgStatus === 'loading'
+                                                ? `Đang tải bộ tách nền${bgPercent !== null ? ` ${bgPercent}%` : ''}...`
+                                                : 'Đang xóa nền, thay phông xanh...'}
+                                    </span>
+                                    {bgStatus === 'loading' && !isPreparingImage && (
+                                        <span className="text-xs text-gray-500">Chỉ lần đầu mới phải tải, vui lòng chờ</span>
+                                    )}
                                 </div>
                             )}
                         </div>
@@ -309,8 +381,8 @@ export default function FormContainer() {
                             {isTouchDevice && (
                                 <button
                                     type="button"
-                                    onClick={() => cameraInputRef.current?.click()}
-                                    disabled={isPreparingImage}
+                                    onClick={() => openPicker(cameraInputRef.current)}
+                                    disabled={isImageBusy}
                                     className="flex items-center justify-center gap-2 py-3 rounded-xl bg-buddhist-orange text-white font-semibold shadow-sm active:scale-[0.98] disabled:opacity-60"
                                 >
                                     📷 Chụp ảnh
@@ -318,13 +390,36 @@ export default function FormContainer() {
                             )}
                             <button
                                 type="button"
-                                onClick={() => galleryInputRef.current?.click()}
-                                disabled={isPreparingImage}
+                                onClick={() => openPicker(galleryInputRef.current)}
+                                disabled={isImageBusy}
                                 className="flex items-center justify-center gap-2 py-3 rounded-xl border border-buddhist-orange text-buddhist-orange bg-white font-semibold shadow-sm active:scale-[0.98] disabled:opacity-60"
                             >
                                 🖼️ {selectedFile ? 'Đổi ảnh' : isTouchDevice ? 'Chọn ảnh' : 'Chọn ảnh từ máy'}
                             </button>
                         </div>
+
+                        <label className="flex items-start gap-2 mt-3 cursor-pointer select-none">
+                            <input
+                                type="checkbox"
+                                checked={useBlueBg}
+                                onChange={(e) => toggleBlueBg(e.target.checked)}
+                                className="mt-0.5 w-5 h-5 accent-buddhist-orange"
+                            />
+                            <span className="text-sm text-gray-700">Xóa nền, thay phông xanh cho ảnh thờ <span className="text-gray-400">(nên dùng)</span></span>
+                        </label>
+                        {useBlueBg && bgStatus === 'failed' && (
+                            <p className="text-amber-600 text-xs mt-2">
+                                Không tách được nền tự động cho ảnh này, đang dùng ảnh gốc. Kiểm tra mạng rồi{' '}
+                                <button
+                                    type="button"
+                                    onClick={() => originalFile && void runBlueBackground(originalFile)}
+                                    className="underline font-semibold"
+                                >
+                                    thử lại
+                                </button>
+                                , hoặc chọn ảnh khác rõ mặt hơn.
+                            </p>
+                        )}
 
                         {imageError && <p className="text-red-500 text-xs mt-2">{imageError}</p>}
                         {!imageError && triedSubmit && !selectedFile && <p className="text-red-500 text-xs mt-2">Vui lòng tải lên di ảnh</p>}
@@ -335,7 +430,7 @@ export default function FormContainer() {
                         <div>
                             <label className={labelClass}>Ngày đăng ký</label>
                             <div className="px-4 py-3 bg-gray-50 text-gray-600 rounded-xl border border-gray-200 text-sm font-medium">
-                                Sẽ tự động cập nhật thời gian gửi là: {new Date().toLocaleString('vi-VN')}
+                                Ghi tự động theo thời điểm bạn bấm gửi
                             </div>
                         </div>
 
@@ -376,7 +471,7 @@ export default function FormContainer() {
                         void handleSubmit(onSubmit as any)();
                     }}
                     type="button"
-                    disabled={isSubmitting || isPreparingImage}
+                    disabled={isSubmitting || isImageBusy}
                     className={`w-full py-4 rounded-xl font-bold text-lg text-white shadow-lg transition-all duration-300 relative overflow-hidden group
             ${isSubmitting ? 'bg-orange-400 cursor-not-allowed' : 'bg-gradient-to-r from-buddhist-orange to-buddhist-red hover:shadow-orange-500/30 hover:-translate-y-1'}`}
                 >

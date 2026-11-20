@@ -1,12 +1,13 @@
 // Chuẩn bị di ảnh ngay trên máy người dùng trước khi gửi lên server:
 //  - Vercel chỉ nhận tối đa 4,5 MB mỗi lần gửi, trong khi ảnh chụp điện thoại thường 3–12 MB.
+//    Mỗi lần gửi có 2 ảnh (ảnh gốc + ảnh phông xanh) nên mỗi ảnh giới hạn 2 MB.
 //  - Vẽ lại ảnh qua canvas: trình duyệt tự xoay đúng chiều theo EXIF, đồng thời xoá EXIF (kể cả toạ độ GPS).
 
 const MAX_SIDE = 2400; // dư cho ô ảnh của khung in (~1100x1780 px)
-const MAX_BYTES = 3.5 * 1024 * 1024;
-const QUALITIES = [0.9, 0.8, 0.7];
+const MAX_BYTES = 2 * 1024 * 1024;
+const QUALITIES = [0.9, 0.82, 0.74];
 
-function loadImage(file: File): Promise<HTMLImageElement> {
+function loadImage(file: Blob): Promise<HTMLImageElement> {
     return new Promise((resolve, reject) => {
         const url = URL.createObjectURL(file);
         const img = new Image();
@@ -32,31 +33,41 @@ function canvasToJpeg(canvas: HTMLCanvasElement, quality: number): Promise<Blob>
     });
 }
 
+/** Xuất canvas thành JPEG ≤ maxBytes (giảm chất lượng, rồi giảm kích thước nếu cần). */
+export async function canvasToJpegFile(canvas: HTMLCanvasElement, name: string, maxBytes = MAX_BYTES): Promise<File> {
+    let source = canvas;
+    for (let attempt = 0; attempt < 4; attempt++) {
+        for (const quality of QUALITIES) {
+            const blob = await canvasToJpeg(source, quality);
+            if (blob.size <= maxBytes) {
+                return new File([blob], name, { type: 'image/jpeg', lastModified: Date.now() });
+            }
+        }
+        const smaller = document.createElement('canvas');
+        smaller.width = Math.max(1, Math.round(source.width * 0.8));
+        smaller.height = Math.max(1, Math.round(source.height * 0.8));
+        smaller.getContext('2d')?.drawImage(source, 0, 0, smaller.width, smaller.height);
+        source = smaller;
+    }
+    throw new Error('Ảnh quá lớn, vui lòng chọn ảnh khác.');
+}
+
+/** Xoay đúng chiều + thu nhỏ (cạnh dài ≤ 2400 px) + nén JPEG ≤ 2 MB, xoá EXIF/GPS. */
 export async function prepareImage(file: File): Promise<File> {
     const img = await loadImage(file);
     const width = img.naturalWidth;
     const height = img.naturalHeight;
     if (!width || !height) throw new Error('Ảnh không hợp lệ, vui lòng chọn ảnh khác.');
 
-    let scale = Math.min(1, MAX_SIDE / Math.max(width, height));
-    for (let attempt = 0; attempt < 4; attempt++) {
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.max(1, Math.round(width * scale));
-        canvas.height = Math.max(1, Math.round(height * scale));
-        const ctx = canvas.getContext('2d');
-        if (!ctx) throw new Error('Trình duyệt không hỗ trợ xử lý ảnh, vui lòng dùng trình duyệt khác.');
+    const scale = Math.min(1, MAX_SIDE / Math.max(width, height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(width * scale));
+    canvas.height = Math.max(1, Math.round(height * scale));
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('Trình duyệt không hỗ trợ xử lý ảnh, vui lòng dùng trình duyệt khác.');
 
-        ctx.fillStyle = '#FFFFFF'; // nền trắng cho ảnh PNG trong suốt
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-
-        for (const quality of QUALITIES) {
-            const blob = await canvasToJpeg(canvas, quality);
-            if (blob.size <= MAX_BYTES) {
-                return new File([blob], 'di-anh.jpg', { type: 'image/jpeg', lastModified: Date.now() });
-            }
-        }
-        scale *= 0.75;
-    }
-    throw new Error('Ảnh quá lớn, vui lòng chọn ảnh khác.');
+    ctx.fillStyle = '#FFFFFF'; // nền trắng cho ảnh PNG trong suốt
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    return canvasToJpegFile(canvas, 'di-anh.jpg');
 }
