@@ -61,6 +61,7 @@ export async function POST(req: Request) {
 
         // Process user image to fit safe area exactly
         const processedPortrait = await sharp(imageBuffer)
+            .rotate() // tự xoay đúng chiều theo EXIF (ảnh chụp điện thoại)
             .resize(Math.floor(safeW), Math.floor(safeH), { fit: 'cover', position: 'center' })
             .toBuffer();
 

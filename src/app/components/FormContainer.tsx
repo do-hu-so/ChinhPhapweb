@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from 'react';
-import { useForm, Controller } from 'react-hook-form';
+import { useEffect, useRef, useState } from 'react';
+import { useForm } from 'react-hook-form';
 import { yupResolver } from '@hookform/resolvers/yup';
 import * as yup from 'yup';
+import { prepareImage } from '../lib/prepareImage';
 
 // Validation schema
 const schema = yup.object().shape({
@@ -37,6 +38,18 @@ export default function FormContainer() {
     const [previewImage, setPreviewImage] = useState<string | null>(null);
     const [selectedFile, setSelectedFile] = useState<File | null>(null);
     const [submitSuccess, setSubmitSuccess] = useState(false);
+    const [isPreparingImage, setIsPreparingImage] = useState(false);
+    const [imageError, setImageError] = useState<string | null>(null);
+    const [triedSubmit, setTriedSubmit] = useState(false);
+    const [isTouchDevice, setIsTouchDevice] = useState(false);
+    const [isDragging, setIsDragging] = useState(false);
+    const galleryInputRef = useRef<HTMLInputElement>(null);
+    const cameraInputRef = useRef<HTMLInputElement>(null);
+
+    // Chỉ điện thoại / máy tính bảng mới hiện nút "Chụp ảnh" (máy tính bỏ qua thuộc tính capture).
+    useEffect(() => {
+        setIsTouchDevice(window.matchMedia('(pointer: coarse)').matches);
+    }, []);
 
     const { register, handleSubmit, formState: { errors } } = useForm<FormData>({
         // @ts-expect-error - yupResolver types mismatch with this specific yup version
@@ -47,6 +60,10 @@ export default function FormContainer() {
     });
 
     const onSubmit = async (data: FormData) => {
+        if (isPreparingImage) {
+            alert("Ảnh đang được xử lý, vui lòng đợi trong giây lát rồi bấm lại");
+            return;
+        }
         if (!selectedFile) {
             alert("Vui lòng tải lên 1 tấm Di Ảnh của vị Hương Linh");
             return;
@@ -85,16 +102,39 @@ export default function FormContainer() {
         }
     };
 
+    // Xoay đúng chiều + thu nhỏ + nén ảnh ngay trên máy rồi mới dùng làm di ảnh.
+    const handleFile = async (file?: File | null) => {
+        if (!file) return;
+        if (file.type && !file.type.startsWith('image/')) {
+            setImageError('Vui lòng chọn tệp ảnh (JPG, PNG).');
+            return;
+        }
+        setImageError(null);
+        setIsPreparingImage(true);
+        try {
+            const prepared = await prepareImage(file);
+            setSelectedFile(prepared);
+            setPreviewImage((old) => {
+                if (old) URL.revokeObjectURL(old);
+                return URL.createObjectURL(prepared);
+            });
+        } catch (err) {
+            setImageError(err instanceof Error ? err.message : 'Không đọc được ảnh, vui lòng chọn ảnh khác.');
+        } finally {
+            setIsPreparingImage(false);
+        }
+    };
+
     const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
-        if (file) {
-            setSelectedFile(file);
-            const reader = new FileReader();
-            reader.onloadend = () => {
-                setPreviewImage(reader.result as string);
-            };
-            reader.readAsDataURL(file);
-        }
+        e.target.value = ''; // cho phép chọn lại cùng một ảnh
+        void handleFile(file);
+    };
+
+    const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+        e.preventDefault();
+        setIsDragging(false);
+        void handleFile(e.dataTransfer.files?.[0]);
     };
 
     if (submitSuccess) {
@@ -209,36 +249,85 @@ export default function FormContainer() {
                     {/* Photo Upload Box */}
                     <div>
                         <label className={labelClass}>Di Ảnh (4x6) <span className="text-red-500">*</span></label>
-                        <p className="text-xs text-buddhist-frame mb-3">AI sẽ tự động tách nền và loại bỏ chữ trên ảnh để tạo khung 20x30 chuyên nghiệp.</p>
+                        <p className="text-xs text-buddhist-frame mb-3">
+                            Chọn ảnh rõ mặt, chụp thẳng. Ảnh sẽ tự xoay đúng chiều và được thu nhỏ trước khi gửi.
+                        </p>
 
-                        <div className={`relative border-2 border-dashed rounded-xl p-6 flex flex-col items-center justify-center text-center transition-colors
-                           ${previewImage ? 'border-buddhist-orange bg-orange-50' : 'border-gray-300 hover:bg-gray-50 bg-white'}`}>
+                        {/* Ô chọn ảnh ẩn: thư viện ảnh / tệp trên máy */}
+                        <input
+                            ref={galleryInputRef}
+                            type="file"
+                            accept="image/*"
+                            onChange={handleImageChange}
+                            className="hidden"
+                        />
+                        {/* Ô chọn ảnh ẩn: mở thẳng camera sau của điện thoại */}
+                        <input
+                            ref={cameraInputRef}
+                            type="file"
+                            accept="image/*"
+                            capture="environment"
+                            onChange={handleImageChange}
+                            className="hidden"
+                        />
 
-                            <input
-                                type="file"
-                                accept="image/*"
-                                onChange={handleImageChange}
-                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-                            />
+                        <div
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => galleryInputRef.current?.click()}
+                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') galleryInputRef.current?.click(); }}
+                            onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                            onDragLeave={() => setIsDragging(false)}
+                            onDrop={handleDrop}
+                            className={`relative border-2 border-dashed rounded-xl p-6 flex flex-col items-center justify-center text-center transition-colors cursor-pointer
+                           ${isDragging ? 'border-buddhist-orange bg-orange-100' : previewImage ? 'border-buddhist-orange bg-orange-50' : 'border-gray-300 hover:bg-gray-50 bg-white'}`}>
 
                             {previewImage ? (
-                                <div className="relative w-32 h-40 rounded-lg overflow-hidden border border-orange-200 shadow-sm z-0">
-                                    <img src={previewImage} alt="Preview" className="w-full h-full object-cover" />
-                                    <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity">
-                                        <span className="text-white text-xs font-semibold">Thay đổi (Chạm lại)</span>
-                                    </div>
+                                <div className="relative w-32 h-40 rounded-lg overflow-hidden border border-orange-200 shadow-sm">
+                                    <img src={previewImage} alt="Di ảnh đã chọn" className="w-full h-full object-cover" />
                                 </div>
                             ) : (
-                                <div className="py-8 z-0">
+                                <div className="py-6">
                                     <svg className="w-12 h-12 text-gray-400 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
                                     </svg>
-                                    <p className="text-sm font-medium text-gray-600">Nhấn hoặc kéo thả ảnh vào đây</p>
-                                    <p className="text-xs text-gray-400 mt-1">Hỗ trợ .jpg, .png</p>
+                                    <p className="text-sm font-medium text-gray-600">
+                                        {isTouchDevice ? 'Chạm để chọn ảnh' : 'Nhấn để chọn ảnh hoặc kéo thả ảnh vào đây'}
+                                    </p>
+                                    <p className="text-xs text-gray-400 mt-1">Hỗ trợ ảnh JPG, PNG</p>
+                                </div>
+                            )}
+
+                            {isPreparingImage && (
+                                <div className="absolute inset-0 bg-white/80 rounded-xl flex items-center justify-center">
+                                    <span className="text-sm font-semibold text-buddhist-orange">Đang xử lý ảnh...</span>
                                 </div>
                             )}
                         </div>
-                        {!selectedFile && <p className="text-red-500 text-xs mt-2">Vui lòng tải lên di ảnh</p>}
+
+                        <div className={`grid gap-3 mt-3 ${isTouchDevice ? 'grid-cols-2' : 'grid-cols-1'}`}>
+                            {isTouchDevice && (
+                                <button
+                                    type="button"
+                                    onClick={() => cameraInputRef.current?.click()}
+                                    disabled={isPreparingImage}
+                                    className="flex items-center justify-center gap-2 py-3 rounded-xl bg-buddhist-orange text-white font-semibold shadow-sm active:scale-[0.98] disabled:opacity-60"
+                                >
+                                    📷 Chụp ảnh
+                                </button>
+                            )}
+                            <button
+                                type="button"
+                                onClick={() => galleryInputRef.current?.click()}
+                                disabled={isPreparingImage}
+                                className="flex items-center justify-center gap-2 py-3 rounded-xl border border-buddhist-orange text-buddhist-orange bg-white font-semibold shadow-sm active:scale-[0.98] disabled:opacity-60"
+                            >
+                                🖼️ {selectedFile ? 'Đổi ảnh' : isTouchDevice ? 'Chọn ảnh' : 'Chọn ảnh từ máy'}
+                            </button>
+                        </div>
+
+                        {imageError && <p className="text-red-500 text-xs mt-2">{imageError}</p>}
+                        {!imageError && triedSubmit && !selectedFile && <p className="text-red-500 text-xs mt-2">Vui lòng tải lên di ảnh</p>}
                     </div>
 
                     {/* Registration Info */}
@@ -282,9 +371,12 @@ export default function FormContainer() {
             {/* Submit Button */}
             <div className="pt-6">
                 <button
-                    onClick={handleSubmit(onSubmit as any)}
+                    onClick={() => {
+                        setTriedSubmit(true);
+                        void handleSubmit(onSubmit as any)();
+                    }}
                     type="button"
-                    disabled={isSubmitting}
+                    disabled={isSubmitting || isPreparingImage}
                     className={`w-full py-4 rounded-xl font-bold text-lg text-white shadow-lg transition-all duration-300 relative overflow-hidden group
             ${isSubmitting ? 'bg-orange-400 cursor-not-allowed' : 'bg-gradient-to-r from-buddhist-orange to-buddhist-red hover:shadow-orange-500/30 hover:-translate-y-1'}`}
                 >
@@ -294,7 +386,7 @@ export default function FormContainer() {
                                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                             </svg>
-                            ĐANG XỬ LÝ ẢNH AI...
+                            ĐANG GỬI, VUI LÒNG CHỜ...
                         </span>
                     ) : (
                         <>
