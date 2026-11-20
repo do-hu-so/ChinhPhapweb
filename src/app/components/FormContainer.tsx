@@ -47,6 +47,8 @@ type FormData = yup.InferType<typeof schema>;
 export default function FormContainer() {
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [submitSuccess, setSubmitSuccess] = useState(false);
+    const [framedImage, setFramedImage] = useState<string | null>(null); // ảnh thờ có khung server trả về
+    const [submittedName, setSubmittedName] = useState('');
     const [isPreparingImage, setIsPreparingImage] = useState(false);
     const [originalFile, setOriginalFile] = useState<File | null>(null); // ảnh gốc đã xoay + nén
     const [blueFile, setBlueFile] = useState<File | null>(null); // ảnh đã xoá nền, thay phông xanh
@@ -73,7 +75,7 @@ export default function FormContainer() {
     const isBgBusy = bgStatus === 'loading' || bgStatus === 'processing';
     const isImageBusy = isPreparingImage || isBgBusy;
 
-    const { register, handleSubmit, formState: { errors } } = useForm<FormData>({
+    const { register, handleSubmit, reset, getValues, formState: { errors } } = useForm<FormData>({
         // @ts-expect-error - yupResolver types mismatch with this specific yup version
         resolver: yupResolver(schema),
         defaultValues: {
@@ -117,6 +119,9 @@ export default function FormContainer() {
                 throw new Error('API submission failed');
             }
 
+            const result = await response.json().catch(() => ({}));
+            setFramedImage(typeof result.framedImage === 'string' ? result.framedImage : null);
+            setSubmittedName(data.huongLinh || '');
             setSubmitSuccess(true);
             window.scrollTo({ top: 0, behavior: 'smooth' });
         } catch (error) {
@@ -180,6 +185,53 @@ export default function FormContainer() {
         if (checked && originalFile && !blueFile && !isBgBusy) void runBlueBackground(originalFile);
     };
 
+    // Lưu ảnh thờ: điện thoại mở bảng chia sẻ (có "Lưu ảnh"), máy tính tải file về.
+    const saveFramedImage = async () => {
+        if (!framedImage) return;
+        const blob = await (await fetch(framedImage)).blob();
+        const slug = submittedName.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D')
+            .replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase();
+        const fileName = `anh-tho-${slug || 'huong-linh'}.jpg`;
+        const file = new File([blob], fileName, { type: 'image/jpeg' });
+        if (isTouchDevice && navigator.canShare?.({ files: [file] })) {
+            try {
+                await navigator.share({ files: [file], title: 'Ảnh thờ hương linh' });
+                return;
+            } catch (err) {
+                if (err instanceof Error && err.name === 'AbortError') return; // người dùng tự đóng
+            }
+        }
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+    };
+
+    // Đăng ký thêm hương linh: giữ lại thông tin trai chủ, xoá phần hương linh và ảnh.
+    const startNextRegistration = () => {
+        const v = getValues();
+        reset({
+            traiChu: v.traiChu,
+            phapDanhTraiChu: v.phapDanhTraiChu,
+            tuoiTraiChu: v.tuoiTraiChu,
+            diaChi: v.diaChi,
+            thoiGianKyGui: v.thoiGianKyGui,
+        });
+        bgJobRef.current++;
+        setOriginalFile(null);
+        setBlueFile(null);
+        setBgStatus('idle');
+        setImageError(null);
+        setTriedSubmit(false);
+        setFramedImage(null);
+        setSubmitSuccess(false);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    };
+
     const openPicker = (input: HTMLInputElement | null) => {
         preloadBackgroundRemover(); // tải sẵn bộ tách nền trong lúc người dùng chọn ảnh
         input?.click();
@@ -206,14 +258,36 @@ export default function FormContainer() {
                     </svg>
                 </div>
                 <h2 className="text-2xl font-bold text-gray-800 mb-2">Đăng Ký Thành Công!</h2>
-                <p className="text-gray-600 mb-8">
+                <p className="text-gray-600 mb-6">
                     Thông tin Hương Linh đã được tiếp nhận và chuyển đến Thiền Viện Trúc Lâm Chính Pháp.
                 </p>
+
+                {framedImage && (
+                    <div className="mb-8">
+                        <img
+                            src={framedImage}
+                            alt={`Ảnh thờ ${submittedName}`}
+                            className="mx-auto w-full max-w-xs rounded-lg shadow-lg border border-orange-200"
+                        />
+                        <button
+                            type="button"
+                            onClick={() => void saveFramedImage()}
+                            className="mt-4 w-full max-w-xs py-3 rounded-xl bg-buddhist-orange text-white font-semibold shadow-sm active:scale-[0.98]"
+                        >
+                            ⬇️ Lưu ảnh thờ về máy
+                        </button>
+                        <p className="text-xs text-gray-500 mt-2 max-w-xs mx-auto">
+                            Nếu không lưu được (ví dụ khi mở trong Zalo), hãy nhấn giữ vào ảnh rồi chọn &quot;Lưu ảnh&quot;.
+                            Nhà chùa sẽ kiểm tra lại trước khi in ảnh đặt lên bàn thờ.
+                        </p>
+                    </div>
+                )}
+
                 <button
-                    onClick={() => window.location.reload()}
-                    className="px-6 py-2 bg-buddhist-orange text-white rounded-lg font-medium hover:bg-orange-600 transition-colors shadow-sm"
+                    onClick={startNextRegistration}
+                    className="px-6 py-3 bg-white border border-buddhist-orange text-buddhist-orange rounded-xl font-semibold hover:bg-orange-50 transition-colors shadow-sm"
                 >
-                    Đăng ký Hương Linh khác
+                    Đăng ký thêm Hương Linh (giữ thông tin trai chủ)
                 </button>
             </div>
         );
@@ -346,7 +420,7 @@ export default function FormContainer() {
                            ${isDragging ? 'border-buddhist-orange bg-orange-100' : previewImage ? 'border-buddhist-orange bg-orange-50' : 'border-gray-300 hover:bg-gray-50 bg-white'}`}>
 
                             {previewImage ? (
-                                <div className="relative w-40 h-52 rounded-lg overflow-hidden border border-orange-200 shadow-sm">
+                                <div className="relative w-40 aspect-[31/50] rounded-lg overflow-hidden border border-orange-200 shadow-sm">
                                     <img src={previewImage} alt="Di ảnh đã chọn" className="w-full h-full object-cover" />
                                 </div>
                             ) : (

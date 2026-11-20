@@ -3,6 +3,8 @@
 // Thư viện được tải từ CDN khi cần (không đóng gói vào web) để không làm nặng bản build.
 
 import { canvasToJpegFile } from './prepareImage';
+import { personCrop } from './autoCrop';
+import { PHOTO_WINDOW_ASPECT } from './frameLayout';
 
 const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.2';
 const MODEL_ID = 'Xenova/modnet';
@@ -120,5 +122,16 @@ export async function replaceBackgroundWithBlue(photo: File, onProgress?: (p: Bg
         }
     }
     ctx.putImageData(fg, 0, 0);
-    return canvasToJpegFile(canvas, 'di-anh-phong-xanh.jpg');
+
+    // Cắt quanh người theo đúng tỉ lệ ô ảnh của khung (tính trên mặt nạ rồi quy đổi ra ảnh thật).
+    const mh = matte.height;
+    const aspectInMatte = (PHOTO_WINDOW_ASPECT * (mw / w)) / (mh / h);
+    const r = personCrop(alpha, mw, mh, aspectInMatte);
+    const crop = { x: (r.x * w) / mw, y: (r.y * h) / mh, w: (r.w * w) / mw, h: (r.h * h) / mh };
+
+    const out2 = document.createElement('canvas');
+    out2.width = Math.max(1, Math.round(crop.w));
+    out2.height = Math.max(1, Math.round(crop.h));
+    out2.getContext('2d')?.drawImage(canvas, crop.x, crop.y, crop.w, crop.h, 0, 0, out2.width, out2.height);
+    return canvasToJpegFile(out2, 'di-anh-phong-xanh.jpg');
 }

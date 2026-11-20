@@ -5,6 +5,7 @@ import path from 'path';
 import sharp from 'sharp';
 import { createCanvas, loadImage, registerFont } from 'canvas';
 import { buildAgeLine, buildNameLine, buildYearsLine } from '../../lib/portraitText';
+import { NAMEPLATE_HEIGHT, PHOTO_WINDOW } from '../../lib/frameLayout';
 
 export async function POST(req: Request) {
     try {
@@ -59,10 +60,10 @@ export async function POST(req: Request) {
 
         // Determine safe inner area for the portrait (~21% X, 14% Y from analysis)
         // Adjusting slightly to cover the left white border based on user feedback
-        const safeX = canvasW * 0.208; // slightly less than 0.2116 to move left
-        const safeY = canvasH * 0.1392;
-        const safeW = canvasW * 0.59; // slightly more than 0.5865 to be wider
-        const safeH = canvasH * 0.6745;
+        const safeX = canvasW * PHOTO_WINDOW.x;
+        const safeY = canvasH * PHOTO_WINDOW.y;
+        const safeW = canvasW * PHOTO_WINDOW.w;
+        const safeH = canvasH * PHOTO_WINDOW.h;
 
         // Process user image to fit safe area exactly
         const processedPortrait = await sharp(imageBuffer)
@@ -82,7 +83,7 @@ export async function POST(req: Request) {
         ctx.globalCompositeOperation = 'source-over'; // reset
 
         // Nameplate always has a fixed height
-        const plateHeight = 220;
+        const plateHeight = NAMEPLATE_HEIGHT;
         const plateY = safeY + safeH - plateHeight;
 
         // Solid light green background for readability
@@ -181,6 +182,8 @@ export async function POST(req: Request) {
             message: 'Processing and upload completed successfully',
             framedUrl: result.framedUrl,
             originalUrl: result.originalUrl,
+            // Ảnh thờ có khung trả thẳng về để gia đình xem và tải ngay (~1 MB)
+            framedImage: `data:image/jpeg;base64,${finalImageBuffer.toString('base64')}`,
         });
 
     } catch (error) {
